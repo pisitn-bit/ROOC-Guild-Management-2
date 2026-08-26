@@ -320,7 +320,15 @@ try {
 
   if (getApps().length > 0) {
     db = getFirestore();
-    db.settings({ ignoreUndefinedProperties: true });
+    try {
+      db.settings({ ignoreUndefinedProperties: true });
+    } catch (settingsError: any) {
+      if (settingsError.message && settingsError.message.includes("settings() can only be called")) {
+        console.log("Firestore settings already configured. Skipping.");
+      } else {
+        console.warn("Non-fatal: Failed to set Firestore settings:", settingsError);
+      }
+    }
   }
 } catch (error) {
   console.error("Failed to initialize Firebase Admin:", error);
