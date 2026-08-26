@@ -3,9 +3,6 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "framework": null,
-  "functions": {
-    "api/index.ts": {}
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
