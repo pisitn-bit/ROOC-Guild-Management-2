@@ -7,6 +7,7 @@ import fs from "fs";
 import { GuildState, Member, DEFAULT_JOB_CLASSES, HistoryLog } from "./src/types.js";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import * as DiscordUtils from "./src/utils/discord.js";
 
 import { 
   Client, 
@@ -482,35 +483,45 @@ async function saveStateToFirestore(newState: GuildState) {
   }
   
   // Check if we need to disable buttons on any completed check-in messages
+  // Uses REST API (works for both Vercel Serverless and long-running server)
   for (const event of (newState.events || [])) {
-    if (event.status === 'completed' && event.checkInMessageId && newState.discordConfig?.checkInChannelId && discordClient) {
-      try {
-        let targetChannel: any = null;
-        if (event.checkInThreadId) {
-          targetChannel = await discordClient.channels.fetch(event.checkInThreadId).catch(() => null);
-        } else {
-          targetChannel = await discordClient.channels.fetch(newState.discordConfig.checkInChannelId).catch(() => null);
-        }
-
-        if (targetChannel && targetChannel.isTextBased()) {
-          const msg = await targetChannel.messages.fetch(event.checkInMessageId).catch(() => null);
-          if (msg && msg.components && msg.components.length > 0) {
-            const updatedRow = ActionRowBuilder.from(msg.components[0] as any);
-            updatedRow.components.forEach((c: any) => c.setDisabled(true));
-            await msg.edit({ components: [updatedRow as any] }).catch(console.error);
-            
-            // If it is a thread, we also archive it to tidy up the forum
-            if (targetChannel.isThread && targetChannel.isThread()) {
-              await targetChannel.setArchived(true).catch(console.error);
-            }
-            
-            event.checkInMessageId = undefined; // Clear so we don't fetch again
-            event.checkInThreadId = undefined;
+    if (
+      event.status === 'completed' &&
+      event.checkInMessageId &&
+      newState.discordConfig?.checkInChannelId
+    ) {
+      if (discordClient) {
+        try {
+          let targetChannel: any = null;
+          if (event.checkInThreadId) {
+            targetChannel = await discordClient.channels.fetch(event.checkInThreadId).catch(() => null);
+          } else {
+            targetChannel = await discordClient.channels.fetch(newState.discordConfig.checkInChannelId).catch(() => null);
           }
+
+          if (targetChannel && targetChannel.isTextBased()) {
+            const msg = await targetChannel.messages.fetch(event.checkInMessageId).catch(() => null);
+            if (msg && msg.components && msg.components.length > 0) {
+              const updatedRow = ActionRowBuilder.from(msg.components[0] as any);
+              (updatedRow as any).components.forEach((c: any) => c.setDisabled(true));
+              await msg.edit({ components: [updatedRow as any] }).catch(console.error);
+
+              // If it is a thread, we also archive it to tidy up the forum
+              if (targetChannel.isThread && targetChannel.isThread()) {
+                await targetChannel.setArchived(true).catch(console.error);
+              }
+
+              event.checkInMessageId = undefined;
+              event.checkInThreadId = undefined;
+              continue;
+            }
+          }
+        } catch (err) {
+          console.error("Failed to disable buttons via discord.js client, falling back to REST:", err);
         }
-      } catch (err) {
-        console.error("Failed to disable completed check-in buttons:", err);
       }
+      // Fallback to Discord REST API (works on Vercel / any serverless env)
+      await disableCompletedCheckInMessageRest(event, newState.discordConfig);
     }
   }
 
@@ -636,7 +647,353 @@ function saveLocalBackup() {
   }
 }
 
+type CheckInResult = {
+  success: boolean;
+  message: string;
+  alreadyJoined?: boolean;
+  memberName?: string;
+  eventTitle?: string;
+};
+
+async function performCheckInByEventId(
+  eventId: string | undefined,
+  submittedCode: string,
+  discordId: string,
+  preferActiveEvent = false
+): Promise<CheckInResult> {
+  if (!submittedCode || submittedCode.length !== 6 || isNaN(Number(submittedCode))) {
+    return { success: false, message: "❌ รหัสเช็คอินต้องเป็นตัวเลข 6 หลัก เช่น `/check 556189`" };
+  }
+  const currentState = await loadStateFromFirestore();
+  let event: any = null;
+
+  if (eventId) {
+    event = (currentState.events || []).find((e: any) => e.id === eventId);
+    if (event && event.status !== 'active') {
+      return { success: false, message: "❌ กิจกรรมนี้สิ้นสุดแล้ว หรือไม่พบกิจกรรมในระบบ" };
+    }
+  }
+  if (!event && preferActiveEvent) {
+    event = (currentState.events || []).find((e: any) => e.status === 'active');
+  }
+  if (!event) {
+    return { success: false, message: "❌ ขณะนี้ไม่มีกิจกรรมกิลด์วอร์ที่กำลังเปิดเช็คอินอยู่" };
+  }
+  if (event.checkInCode !== submittedCode) {
+    return { success: false, message: "❌ รหัสเช็คอินไม่ถูกต้อง กรุณาตรวจสอบรหัสอีกครั้ง" };
+  }
+  const member = (currentState.members || []).find((m: Member) => m.discordId === discordId);
+  if (!member) {
+    return {
+      success: false,
+      message: "❌ ไม่พบรายชื่อ Discord ของท่านในระบบกิลด์ กรุณาแจ้งแอดมินเพื่อซิงค์ข้อมูลในหน้าจัดการ Member"
+    };
+  }
+  if (event.participants && event.participants.includes(member.id)) {
+    return {
+      success: true,
+      alreadyJoined: true,
+      memberName: member.name,
+      eventTitle: event.title || event.event_name,
+      message: `ℹ️ ตัวละคร **${member.name}** ได้ลงทะเบียนเข้าร่วมกิจกรรมนี้อยู่แล้ว`
+    };
+  }
+  event.participants = event.participants || [];
+  event.participants.push(member.id);
+  event.member_array = event.participants;
+  currentState.events = (currentState.events || []).map((e: any) => e.id === event.id ? event : e);
+  await saveStateToFirestore(currentState);
+  return {
+    success: true,
+    alreadyJoined: false,
+    memberName: member.name,
+    eventTitle: event.title || event.event_name,
+    message: `✅ ยืนยันรหัสเช็คอินถูกต้อง! ลงทะเบียนเข้าร่วมกิจกรรม **${event.title || event.event_name}** สำเร็จ (เข้าเป็น: ${member.name})`
+  };
+}
+
+async function disableCompletedCheckInMessageRest(
+  event: any,
+  discordConfig: any
+) {
+  if (
+    event.status === 'completed' &&
+    event.checkInMessageId &&
+    discordConfig?.checkInChannelId
+  ) {
+    try {
+      const token = (process.env.DISCORD_BOT_TOKEN || discordConfig?.botToken || '').replace(/•/g, '');
+      await DiscordUtils.disableCompletedMessage({
+        channelId: discordConfig.checkInChannelId,
+        messageId: event.checkInMessageId,
+        threadId: event.checkInThreadId,
+        configBotToken: token,
+      });
+      event.checkInMessageId = undefined;
+      event.checkInThreadId = undefined;
+    } catch (err) {
+      console.error("Failed to disable completed check-in buttons via REST:", err);
+    }
+  }
+}
+
 const app = express();
+
+// ###################################################################
+// Discord Interactions Endpoint (HTTP) — for Serverless (Vercel)
+// ###################################################################
+app.post(
+  "/api/discord/interactions",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const publicKey = process.env.DISCORD_PUBLIC_KEY || "";
+    const signature = req.header("X-Signature-Ed25519");
+    const timestamp = req.header("X-Signature-Timestamp");
+    const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf-8") : String(req.body || "");
+
+    if (!DiscordUtils.verifyDiscordSignature(rawBody, signature, timestamp, publicKey)) {
+      return res.status(401).send("invalid request signature");
+    }
+
+    let interaction: any;
+    try {
+      interaction = JSON.parse(rawBody);
+    } catch {
+      return res.status(400).json({ error: "Invalid JSON body" });
+    }
+
+    const { type, id: interactionId, token: interactionToken, data, user, member, application_id } = interaction;
+    const discordId = member?.user?.id || user?.id;
+    const applicationId = application_id || process.env.DISCORD_APPLICATION_ID || "";
+
+    // PING — for Discord endpoint verification
+    if (type === DiscordUtils.INTERACTION_TYPE.PING) {
+      return res.json({ type: DiscordUtils.INTERACTION_RESPONSE_TYPE.PONG });
+    }
+
+    // 1. MESSAGE COMPONENT (ปุ่มกด เช่น btn_attend_xxx)
+    if (type === DiscordUtils.INTERACTION_TYPE.MESSAGE_COMPONENT && data?.custom_id) {
+      const customId = data.custom_id as string;
+      if (customId.startsWith("btn_attend_")) {
+        const eventId = customId.split("_")[2];
+        try {
+          const modal = DiscordUtils.makeAttendModal(eventId);
+          await DiscordUtils.createInteractionResponse(
+            interactionId,
+            interactionToken,
+            DiscordUtils.INTERACTION_RESPONSE_TYPE.MODAL,
+            modal
+          );
+          return res.status(200).end();
+        } catch (e: any) {
+          console.error("Button / modal open error:", e);
+          await DiscordUtils.createInteractionResponse(
+            interactionId,
+            interactionToken,
+            DiscordUtils.INTERACTION_RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
+            {
+              content: "❌ เกิดข้อผิดพลาดในการเปิดหน้าต่างลงทะเบียน",
+              flags: 1 << 6, // ephemeral
+            }
+          ).catch(() => {});
+          return res.status(200).end();
+        }
+      }
+      // Unknown component
+      await DiscordUtils.createInteractionResponse(
+        interactionId,
+        interactionToken,
+        DiscordUtils.INTERACTION_RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
+        { content: "⚠️ Unknown button action", flags: 1 << 6 }
+      ).catch(() => {});
+      return res.status(200).end();
+    }
+
+    // 2. MODAL SUBMIT (กรอกรหัสเช็คอินเสร็จ)
+    if (type === DiscordUtils.INTERACTION_TYPE.MODAL_SUBMIT && data?.custom_id) {
+      const customId = data.custom_id as string;
+      if (customId.startsWith("modal_attend_")) {
+        const eventId = customId.split("_")[2];
+        const submittedCode = DiscordUtils.getTextInputFromModal(data.components || [], "attend_code");
+
+        // Defer reply first — Firestore lookup may take time
+        try {
+          await DiscordUtils.createInteractionResponse(
+            interactionId,
+            interactionToken,
+            DiscordUtils.INTERACTION_RESPONSE_TYPE.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+            { flags: 1 << 6 }
+          );
+        } catch (deferErr) {
+          console.error("Failed to defer modal interaction:", deferErr);
+        }
+
+        let result: CheckInResult;
+        try {
+          result = await performCheckInByEventId(eventId, submittedCode, discordId, false);
+        } catch (e: any) {
+          result = {
+            success: false,
+            message: `❌ เกิดข้อผิดพลาดในการตรวจสอบรหัสเช็คอิน: ${e?.message || String(e)}`,
+          };
+        }
+
+        // Edit original deferred reply
+        try {
+          if (applicationId) {
+            await DiscordUtils.editOriginalInteractionResponse(applicationId, interactionToken, {
+              content: result.message,
+              flags: 1 << 6,
+            });
+          }
+        } catch (editErr: any) {
+          console.error("Failed to edit modal interaction reply:", editErr);
+          if (applicationId) {
+            await DiscordUtils.followupMessage(applicationId, interactionToken, {
+              content: result.message,
+              flags: 1 << 6,
+            }).catch(() => {});
+          }
+        }
+        return res.status(200).end();
+      }
+
+      // Unknown modal
+      try {
+        await DiscordUtils.createInteractionResponse(
+          interactionId,
+          interactionToken,
+          DiscordUtils.INTERACTION_RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
+          { content: "⚠️ Unknown modal submit", flags: 1 << 6 }
+        );
+      } catch {}
+      return res.status(200).end();
+    }
+
+    // 3. APPLICATION COMMAND (Slash Command /check)
+    if (type === DiscordUtils.INTERACTION_TYPE.APPLICATION_COMMAND) {
+      const cmdName = data?.name as string;
+      const opts = (data?.options || []) as Array<{ name: string; value: any }>;
+      const getOpt = (n: string) => opts.find((o) => o.name === n)?.value;
+
+      if (cmdName === "check") {
+        const code = String(getOpt("code") || "").trim();
+
+        // Defer — might hit Firestore
+        try {
+          await DiscordUtils.createInteractionResponse(
+            interactionId,
+            interactionToken,
+            DiscordUtils.INTERACTION_RESPONSE_TYPE.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+            { flags: 1 << 6 }
+          );
+        } catch {}
+
+        let result: CheckInResult;
+        try {
+          result = await performCheckInByEventId(undefined, code, discordId, true);
+        } catch (e: any) {
+          result = {
+            success: false,
+            message: `❌ เกิดข้อผิดพลาดในการเช็คอิน: ${e?.message || String(e)}`,
+          };
+        }
+
+        try {
+          if (applicationId) {
+            await DiscordUtils.editOriginalInteractionResponse(applicationId, interactionToken, {
+              content: result.message,
+              flags: 1 << 6,
+            });
+          }
+        } catch (e: any) {
+          console.error("Failed to edit slash command reply:", e);
+          if (applicationId) {
+            await DiscordUtils.followupMessage(applicationId, interactionToken, {
+              content: result.message,
+              flags: 1 << 6,
+            }).catch(() => {});
+          }
+        }
+        return res.status(200).end();
+      }
+
+      // Unknown command
+      try {
+        await DiscordUtils.createInteractionResponse(
+          interactionId,
+          interactionToken,
+          DiscordUtils.INTERACTION_RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
+          { content: "⚠️ Unknown command", flags: 1 << 6 }
+        );
+      } catch {}
+      return res.status(200).end();
+    }
+
+    // Fallback for other types
+    try {
+      await DiscordUtils.createInteractionResponse(
+        interactionId,
+        interactionToken,
+        DiscordUtils.INTERACTION_RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
+        { content: "⚠️ Unsupported interaction type", flags: 1 << 6 }
+      );
+    } catch {}
+    return res.status(200).end();
+  }
+);
+
+// API: Register slash commands (e.g. /check) for this Discord app
+app.post("/api/discord/register-commands", express.json(), async (req, res) => {
+  try {
+    const adminPin = String(req.body?.adminPin || "");
+    const currentState = await loadStateFromFirestore();
+    if (!adminPin || adminPin !== (currentState.adminPIN || "ro-admin-5678")) {
+      return res.status(403).json({ success: false, message: "Admin PIN ไม่ถูกต้อง" });
+    }
+
+    const applicationId =
+      req.body?.applicationId ||
+      process.env.DISCORD_APPLICATION_ID ||
+      "";
+    const guildId = req.body?.guildId || process.env.DISCORD_GUILD_ID || currentState.discordConfig?.guildId;
+    const configBotToken = currentState.discordConfig?.botToken;
+
+    const commands: DiscordUtils.RegisterCommandOptions[] = [
+      {
+        name: "check",
+        description: "เช็คอินเข้าร่วมกิจกรรมกิลด์วอร์ด้วยรหัส 6 หลัก",
+        options: [
+          {
+            type: 3,
+            name: "code",
+            description: "รหัสเช็คอิน 6 หลักที่แจ้งโดยหัวหน้ากิลด์",
+            required: true,
+          },
+        ],
+      },
+    ];
+
+    const result = await DiscordUtils.registerGuildSlashCommands(
+      applicationId,
+      commands,
+      configBotToken,
+      guildId || undefined
+    );
+
+    return res.json({
+      success: true,
+      message: `Register Slash Commands สำเร็จ! (${guildId ? "Guild = " + guildId : "Global (อาจใช้เวลา 1 ชั่วโมง)"})`,
+      registeredCount: Array.isArray(result) ? result.length : 1,
+    });
+  } catch (err: any) {
+    console.error("Register slash commands error:", err);
+    return res.status(500).json({
+      success: false,
+      message: `Failed to register slash commands: ${err?.message || String(err)}`,
+    });
+  }
+});
 
 // Lazy database state initialization (essential for Serverless environment like Vercel)
 let initPromise: Promise<GuildState> | null = null;
@@ -1250,78 +1607,123 @@ app.use(express.json());
 
     let botSent = false;
 
-    // Try sending interactive Check-in message using Discord Bot Client if channel is configured
-    if (webhookType === "events" && eventId && discordClient && state.discordConfig.checkInChannelId) {
+    // Try sending interactive Check-in message using Discord Bot
+    // (A) Use discord.js gateway client if available (for long-running servers)
+    // (B) Fallback to Discord REST API (works on Vercel / any serverless environment)
+    if (webhookType === "events" && eventId && state.discordConfig.checkInChannelId) {
+      const currentState1 = await loadStateFromFirestore();
+      const effectiveConfig = currentState1.discordConfig || state.discordConfig;
+      const embedObj = DiscordUtils.makeEmbed({
+        title: title || "📢 ประกาศกิจกรรมกิลด์",
+        description: message || "มีการอัปเดตกิจกรรมใหม่ในระบบ",
+        color: color || 3066993,
+        fields: fields || [],
+        footerText: "ระบบจัดการกิลด์ RO Classic - โปร่งใส ตรวจสอบได้",
+      });
+
+      const threadName = `⚔️ ${title || "กิจกรรมกิลด์วอร์"}`;
+      let channelType: number | undefined;
+
+      // Try to fetch type via REST API (cheap) first so we know if it's a Forum channel
       try {
-        const channel = await discordClient.channels.fetch(state.discordConfig.checkInChannelId).catch(() => null);
-        if (channel) {
-          const embed = new EmbedBuilder()
-            .setTitle(title || "📢 ประกาศกิจกรรมกิลด์")
-            .setDescription(message || "มีการอัปเดตกิจกรรมใหม่ในระบบ")
-            .setColor(color || 3066993)
-            .setTimestamp()
-            .setFooter({ text: "ระบบจัดการกิลด์ RO Classic - โปร่งใส ตรวจสอบได้" });
-
-          if (fields && fields.length > 0) {
-            embed.addFields(fields);
-          }
-
-          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`btn_attend_${eventId}`)
-              .setLabel('มาวอร์ ⚔️')
-              .setStyle(ButtonStyle.Success)
-          );
-
-          if (channel.type === ChannelType.GuildForum) {
-            // Channel is a Forum! Create a new thread/post
-            const thread = await (channel as any).threads.create({
-              name: `⚔️ ${title || "กิจกรรมกิลด์วอร์"}`,
-              message: {
-                embeds: [embed],
-                components: [row]
-              }
-            }).catch(console.error);
-
-            if (thread) {
-              const threadMsg = await thread.messages.fetch({ limit: 1 })
-                .then(msgs => msgs.first())
-                .catch(() => null);
-
-              if (threadMsg) {
-                console.log(`Successfully created check-in forum thread: ${thread.id}, message: ${threadMsg.id}`);
-                const currentState = await loadStateFromFirestore();
-                currentState.events = (currentState.events || []).map(e => {
-                  if (e.id === eventId) {
-                    return { ...e, checkInMessageId: threadMsg.id, checkInThreadId: thread.id };
-                  }
-                  return e;
-                });
-                await saveStateToFirestore(currentState);
-                botSent = true;
-              }
-            }
-          } else if (channel.isTextBased()) {
-            // Normal text channel
-            const checkInMsg = await (channel as any).send({ embeds: [embed], components: [row] }).catch(console.error);
-            
-            if (checkInMsg) {
-              console.log(`Successfully sent check-in message to Discord: ${checkInMsg.id}`);
-              const currentState = await loadStateFromFirestore();
-              currentState.events = (currentState.events || []).map(e => {
-                if (e.id === eventId) {
-                  return { ...e, checkInMessageId: checkInMsg.id };
-                }
-                return e;
-              });
-              await saveStateToFirestore(currentState);
-              botSent = true;
-            }
-          }
+        const botTokenForFetch = (process.env.DISCORD_BOT_TOKEN || effectiveConfig.botToken || '').replace(/•/g, '');
+        if (botTokenForFetch) {
+          try {
+            const ch = await DiscordUtils.discordApi(`/channels/${effectiveConfig.checkInChannelId}`, { token: botTokenForFetch });
+            channelType = ch?.type;
+          } catch {}
         }
-      } catch (err) {
-        console.error("Failed to send check-in message via Discord bot client:", err);
+      } catch {}
+
+      let sent = false;
+
+      // (A) Try with discord.js client first
+      if (discordClient) {
+        try {
+          const channel = await discordClient.channels.fetch(effectiveConfig.checkInChannelId).catch(() => null);
+          if (channel) {
+            channelType = (channel as any).type ?? channelType;
+            const embed = new EmbedBuilder().setDescription(embedObj.description || '');
+            try {
+              if (embedObj.title) embed.setTitle(embedObj.title);
+              if (embedObj.color !== undefined) embed.setColor(embedObj.color);
+              if (embedObj.footer?.text) embed.setFooter({ text: embedObj.footer.text });
+              if (embedObj.timestamp) embed.setTimestamp(new Date(embedObj.timestamp));
+              if (embedObj.fields?.length) embed.addFields(embedObj.fields);
+            } catch {}
+            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`btn_attend_${eventId}`)
+                .setLabel('มาวอร์ ⚔️')
+                .setStyle(ButtonStyle.Success)
+            );
+            const channelAny = channel as any;
+            if ((channelType ?? channelAny.type) === ChannelType.GuildForum) {
+              const thread = await channelAny.threads?.create({
+                name: threadName,
+                message: { embeds: [embed], components: [row] },
+              }).catch(console.error);
+              if (thread) {
+                const threadMsg = await thread.messages.fetch({ limit: 1 })
+                  .then((msgs: any) => msgs.first()).catch(() => null);
+                if (threadMsg) {
+                  console.log(`[Gateway] Check-in forum thread: ${thread.id}, message: ${threadMsg.id}`);
+                  const s = await loadStateFromFirestore();
+                  s.events = (s.events || []).map((e: any) =>
+                    e.id === eventId ? { ...e, checkInMessageId: threadMsg.id, checkInThreadId: thread.id } : e
+                  );
+                  await saveStateToFirestore(s);
+                  sent = true;
+                }
+              }
+            } else if ('send' in channelAny && typeof channelAny.send === 'function') {
+              const checkInMsg = await channelAny.send({ embeds: [embed], components: [row] }).catch(console.error);
+              if (checkInMsg) {
+                console.log(`[Gateway] Check-in message ID: ${checkInMsg.id}`);
+                const s = await loadStateFromFirestore();
+                s.events = (s.events || []).map((e: any) =>
+                  e.id === eventId ? { ...e, checkInMessageId: checkInMsg.id } : e
+                );
+                await saveStateToFirestore(s);
+                sent = true;
+              }
+            }
+          }
+        } catch (err) {
+          console.error("discord.js check-in send failed, falling back to REST:", err);
+        }
       }
+
+      // (B) Fallback / Primary: Discord REST API
+      if (!sent) {
+        try {
+          const token = (process.env.DISCORD_BOT_TOKEN || effectiveConfig.botToken || '').replace(/•/g, '');
+          if (!token) {
+            throw new Error("Discord bot token is not configured");
+          }
+          const res = await DiscordUtils.sendCheckInMessage({
+            channelId: effectiveConfig.checkInChannelId!,
+            channelType,
+            eventId,
+            embed: embedObj,
+            threadName,
+            configBotToken: token,
+          });
+          if (res?.messageId) {
+            console.log(`[REST] Check-in message ID: ${res.messageId}${res.threadId ? ` (thread=${res.threadId})` : ''}`);
+            const s = await loadStateFromFirestore();
+            s.events = (s.events || []).map((e: any) =>
+              e.id === eventId ? { ...e, checkInMessageId: res.messageId, checkInThreadId: res.threadId || undefined } : e
+            );
+            await saveStateToFirestore(s);
+            sent = true;
+          }
+        } catch (err) {
+          console.error("Failed to send check-in message via REST API:", err);
+        }
+      }
+
+      if (sent) botSent = true;
     }
     
     if (botSent) {
