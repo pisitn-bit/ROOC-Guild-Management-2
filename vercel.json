@@ -4,13 +4,7 @@
   "installCommand": "npm install",
   "framework": null,
   "functions": {
-    "api/index.ts": {
-      "includeFiles": [
-        "src/**",
-        "server.ts",
-        ".env.example"
-      ]
-    }
+    "api/index.ts": {}
   },
   "rewrites": [
     {

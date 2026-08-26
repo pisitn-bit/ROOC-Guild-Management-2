@@ -1,4 +1,4 @@
-// import { verifyKey } from 'discord.js';
+import { verifyKey } from 'discord.js';
 
 const API_BASE = 'https://discord.com/api/v10';
 
