@@ -65,9 +65,17 @@ export default function Dashboard({ state, currentUser, isAdmin, onUpdateState, 
   const activeEvents = events.filter(e => e.status === 'active');
   const completedEvents = events.filter(e => e.status === 'completed');
   
-  // Calculate cycle progress
+  // Calculate cycle progress dynamically from events
+  const receivedIds = new Set<string>();
+  events.forEach(e => {
+    e.drops?.forEach(d => {
+      if (d.assignedToMemberId && d.cycle === state.currentCycle) {
+        receivedIds.add(d.assignedToMemberId);
+      }
+    });
+  });
   const totalMembersCount = members.length;
-  const receivedInCycleCount = members.filter(m => m.hasReceivedInCycle).length;
+  const receivedInCycleCount = members.filter(m => receivedIds.has(m.id)).length;
   const eligibleInCycleCount = totalMembersCount - receivedInCycleCount;
 
   // Calculate total drops distributed
@@ -126,8 +134,11 @@ export default function Dashboard({ state, currentUser, isAdmin, onUpdateState, 
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     .slice(0, 10);
 
-  // Simple participation average
-  const totalParticipation = members.reduce((sum, m) => sum + m.participatedWarsCount, 0);
+  // Simple participation average calculated dynamically from events
+  const totalParticipation = members.reduce((sum, m) => {
+    const count = events.filter(e => e.participants?.includes(m.id)).length;
+    return sum + count;
+  }, 0);
   const avgParticipation = totalMembersCount > 0 
     ? (totalParticipation / totalMembersCount).toFixed(1) 
     : '0';
@@ -445,34 +456,16 @@ export default function Dashboard({ state, currentUser, isAdmin, onUpdateState, 
                           <p className="text-xs text-slate-500 italic text-center py-2">ยังไม่มีผู้เข้าร่วมลงทะเบียนกิจกรรมนี้</p>
                         ) : (
                           <div className="space-y-3.5">
-                            {/* Class distribution count */}
                             {(() => {
                               const participantMembers = members.filter(m => event.participants.includes(m.id));
-                              const classCounts: { [key: string]: number } = {};
-                              participantMembers.forEach(p => {
-                                const cls = p.jobClass || 'Lord Knight';
-                                classCounts[cls] = (classCounts[cls] || 0) + 1;
-                              });
-                              const sortedClasses = Object.entries(classCounts).sort((a, b) => b[1] - a[1]);
 
                               return (
                                 <div className="space-y-3">
-                                  {/* Job Class Badges */}
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {sortedClasses.map(([cls, cnt]) => (
-                                      <span key={cls} className="bg-blue-950/40 border border-blue-500/20 text-blue-400 font-bold px-2 py-0.5 rounded text-[10px] flex items-center gap-1">
-                                        <span>{cls}</span>
-                                        <span className="bg-blue-900/60 text-slate-200 px-1 rounded font-mono text-[9px]">x{cnt}</span>
-                                      </span>
-                                    ))}
-                                  </div>
-
                                   {/* Individual Participants List */}
                                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1.5">
                                     {participantMembers.map(m => (
-                                      <div key={m.id} className="bg-slate-950/40 border border-slate-850/50 p-2 rounded-xl flex items-center justify-between text-[11px] gap-2">
-                                        <span className="font-semibold text-slate-300 truncate">👤 {m.name}</span>
-                                        <span className="text-[10px] text-slate-500 italic truncate shrink-0">{m.jobClass || 'Lord Knight'}</span>
+                                      <div key={m.id} className="bg-slate-950/40 border border-slate-850/50 p-2.5 rounded-xl flex items-center justify-center text-[11px] gap-2">
+                                        <span className="font-bold text-slate-300 truncate">👤 {m.name}</span>
                                       </div>
                                     ))}
                                   </div>
@@ -510,11 +503,11 @@ export default function Dashboard({ state, currentUser, isAdmin, onUpdateState, 
               {/* Box 1: Eligible Members */}
               <div className="bg-slate-950/60 rounded-xl p-3 border border-slate-850">
                 <span className="text-xs font-bold text-blue-400 block mb-2 font-mono">🟢 ผู้ยังมีสิทธิ์ประมูล ({eligibleInCycleCount} คน)</span>
-                {members.filter(m => !m.hasReceivedInCycle).length === 0 ? (
+                {members.filter(m => !receivedIds.has(m.id)).length === 0 ? (
                   <p className="text-[11px] text-slate-500 py-4 text-center italic">ทุกคนได้รับของประมูลครบแล้วในรอบนี้!</p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
-                    {members.filter(m => !m.hasReceivedInCycle).map(m => (
+                    {members.filter(m => !receivedIds.has(m.id)).map(m => (
                       <span key={m.id} className="text-[11px] bg-slate-900/80 border border-blue-500/10 hover:border-blue-500/30 text-slate-300 px-2.5 py-1 rounded-md font-semibold transition-colors">
                         👤 {m.name}
                       </span>
@@ -526,11 +519,11 @@ export default function Dashboard({ state, currentUser, isAdmin, onUpdateState, 
               {/* Box 2: Already Received Members */}
               <div className="bg-slate-950/60 rounded-xl p-3 border border-slate-850">
                 <span className="text-xs font-bold text-yellow-500 block mb-2 font-mono">🔴 ได้รับของประมูลไปแล้วในรอบปัจจุบัน ({receivedInCycleCount} คน)</span>
-                {members.filter(m => m.hasReceivedInCycle).length === 0 ? (
+                {members.filter(m => receivedIds.has(m.id)).length === 0 ? (
                   <p className="text-[11px] text-slate-500 py-4 text-center italic">ยังไม่มีใครได้รับของในรอบรอบนี้ (เริ่มคิวใหม่)</p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
-                    {members.filter(m => m.hasReceivedInCycle).map(m => (
+                    {members.filter(m => receivedIds.has(m.id)).map(m => (
                       <span key={m.id} className="text-[11px] bg-slate-900/40 border border-slate-800 text-slate-400 line-through decoration-slate-700 px-2.5 py-1 rounded-md">
                         ✓ {m.name}
                       </span>
@@ -618,112 +611,7 @@ export default function Dashboard({ state, currentUser, isAdmin, onUpdateState, 
             )}
           </div>
 
-          {/* Guild Class Analytics Panel */}
-          <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-4.5 space-y-4 shadow-[0_4px_12px_rgba(0,0,0,0.3)]">
-            <div className="flex items-center gap-2 pb-2 border-b border-slate-850">
-              <TrendingUp className="w-4 h-4 text-blue-400" />
-              <h3 className="font-bold text-slate-100 text-sm">📊 บทวิเคราะห์โครงสร้างอาชีพ (Class Analytics)</h3>
-            </div>
 
-            {(() => {
-              const totalCount = members.length;
-              if (totalCount === 0) return <p className="text-xs text-slate-500 italic py-2 text-center">ไม่มีข้อมูลสมาชิกในระบบ</p>;
-
-              const tanksCount = members.filter(m => ['Lord Knight', 'Paladin'].includes(m.jobClass || '')).length;
-              const supportCount = members.filter(m => ['High Priest', 'Scholar', 'Creator', 'Gypsy', 'Clown'].includes(m.jobClass || '')).length;
-              const dpsCount = totalCount - tanksCount - supportCount;
-
-              const tankPct = Math.round((tanksCount / totalCount) * 100);
-              const supportPct = Math.round((supportCount / totalCount) * 100);
-              const dpsPct = Math.round((dpsCount / totalCount) * 100);
-
-              // Analyze class composition
-              const classCounts: { [key: string]: number } = {};
-              members.forEach(m => {
-                const cls = m.jobClass || 'Lord Knight';
-                classCounts[cls] = (classCounts[cls] || 0) + 1;
-              });
-              const sortedClasses = Object.entries(classCounts).sort((a, b) => b[1] - a[1]);
-
-              // Calculate strategic advice
-              let adviceText = "กำลังรบกิลด์มีความสมดุลและพร้อมลุยทุกคอนเทนต์!";
-              let adviceColor = "text-emerald-400";
-              if (supportPct < 20) {
-                adviceText = "⚠️ สัดส่วนซัพพอร์ตกิลด์ต่ำกว่า 20% แนะนำให้เปิดรับคลาส Priest / Scholar เพิ่มเติม";
-                adviceColor = "text-amber-400";
-              } else if (tanksCount < 2) {
-                adviceText = "⚠️ ขาดแคลน Paladin / LK ปะทะแดนหน้า แนะนำให้จัดหาแทงค์สำรองเพื่อดันแนวรบ";
-                adviceColor = "text-amber-400";
-              } else if (dpsPct > 70) {
-                adviceText = "🔥 กิลด์เน้นหนักพลังโจมตีรุนแรง (Nuker Heavier) เหมาะสำหรับทำดาเมจบอสได้ไว!";
-                adviceColor = "text-blue-400";
-              }
-
-              return (
-                <div className="space-y-4 text-xs">
-                  
-                  {/* Combat Roles */}
-                  <div className="space-y-2.5">
-                    <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider block">สัดส่วนหน้าที่ในกิลด์:</span>
-                    
-                    {/* Tank */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] font-semibold">
-                        <span className="text-blue-400">🛡️ Tank ({tankPct}%)</span>
-                        <span className="text-slate-400">{tanksCount} คน</span>
-                      </div>
-                      <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-blue-500 h-full rounded-full" style={{ width: `${tankPct}%` }}></div>
-                      </div>
-                    </div>
-
-                    {/* DPS */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] font-semibold">
-                        <span className="text-red-400">⚔️ Damage Dealer ({dpsPct}%)</span>
-                        <span className="text-slate-400">{dpsCount} คน</span>
-                      </div>
-                      <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-red-500 h-full rounded-full" style={{ width: `${dpsPct}%` }}></div>
-                      </div>
-                    </div>
-
-                    {/* Support */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] font-semibold">
-                        <span className="text-emerald-400">📿 Supporter ({supportPct}%)</span>
-                        <span className="text-slate-400">{supportCount} คน</span>
-                      </div>
-                      <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${supportPct}%` }}></div>
-                      </div>
-                    </div>
-
-                  </div>
-
-                  {/* Strategic Advice */}
-                  <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-850 space-y-1">
-                    <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">💡 คำแนะนำกลยุทธ์กิลด์:</span>
-                    <p className={`text-[11px] leading-relaxed font-bold ${adviceColor}`}>{adviceText}</p>
-                  </div>
-
-                  {/* Detailed Class breakdown */}
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider block">การกระจายตัวคลาสเรียน (Top Classes):</span>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {sortedClasses.slice(0, 4).map(([cls, cnt]) => (
-                        <div key={cls} className="bg-slate-950/40 p-2 rounded-lg border border-slate-850/50 flex justify-between items-center text-[11px]">
-                          <span className="font-semibold text-slate-300 truncate">{cls}</span>
-                          <span className="font-bold text-yellow-500 font-mono">x{cnt} คน</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                </div>
-              );
-            })()}
-          </div>
 
         </div>
       </div>

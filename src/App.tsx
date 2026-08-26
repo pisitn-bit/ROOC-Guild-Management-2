@@ -37,6 +37,9 @@ export default function App() {
   });
 
   const [currentUser, setCurrentUser] = useState<Member | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    return localStorage.getItem('is_admin_session') === 'true';
+  });
   const [isOffline, setIsOffline] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -82,7 +85,6 @@ export default function App() {
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [authPIN, setAuthPIN] = useState('');
   const [regName, setRegName] = useState('');
-  const [regClass, setRegClass] = useState('Lord Knight');
   const [authError, setAuthError] = useState('');
 
   // 1. Initial State Fetch on Mount
@@ -191,23 +193,14 @@ export default function App() {
       });
     });
     
-    // 2. Map members to update hasReceivedInCycle based on receivedIds and their current status
-    syncedState.members = syncedState.members.map(m => {
-      const hasReceived = receivedIds.has(m.id) || m.hasReceivedInCycle;
-      if (m.hasReceivedInCycle !== hasReceived) {
-        return { ...m, hasReceivedInCycle: hasReceived };
-      }
-      return m;
-    });
-    
-    // 3. Check if all members have received items in the current cycle
-    const totalCount = syncedState.members.length;
-    const receivedCount = syncedState.members.filter(m => m.hasReceivedInCycle).length;
+    // 2. Filter active members (del_flag !== false)
+    const activeMembers = syncedState.members.filter(m => m.del_flag !== false);
+    const totalCount = activeMembers.length;
+    const receivedCount = activeMembers.filter(m => receivedIds.has(m.id)).length;
     
     if (totalCount > 0 && receivedCount === totalCount) {
-      // Cycle complete! Increment cycle and reset members
+      // Cycle complete! Increment cycle
       syncedState.currentCycle += 1;
-      syncedState.members = syncedState.members.map(m => ({ ...m, hasReceivedInCycle: false }));
     }
 
     // Update react state
@@ -249,13 +242,14 @@ export default function App() {
     fields: any[] = [], 
     color = 15844367, 
     content?: string,
-    webhookType?: 'leaves' | 'events' | 'raffles'
+    webhookType?: 'leaves' | 'events' | 'raffles',
+    eventId?: string
   ) => {
     try {
       const response = await fetch('/api/discord-notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, message, fields, color, content, webhookType })
+        body: JSON.stringify({ title, message, fields, color, content, webhookType, eventId })
       });
       const data = await response.json();
       console.log('Discord notify result:', data);
@@ -280,19 +274,21 @@ export default function App() {
       return;
     }
 
-    const isMemAdmin = member.role === 'admin';
-    const expectedPIN = isMemAdmin ? (state.adminPIN || 'ro-admin-5678') : state.systemPIN;
+    const inputPIN = authPIN.trim();
+    const systemPIN = state.systemPIN;
+    const adminPIN = state.adminPIN || 'ro-admin-5678';
 
-    if (authPIN.trim() !== expectedPIN) {
-      setAuthError(isMemAdmin 
-        ? 'รหัสผ่าน Admin (PIN) ไม่ถูกต้อง กรุณากรอกรหัสผ่านลับผู้ดูแลระบบ' 
-        : 'รหัสผ่านกิลด์ (PIN) ไม่ถูกต้อง กรุณาสอบถามแอดมินหรือหัวหน้ากิลด์'
-      );
+    if (inputPIN !== systemPIN && inputPIN !== adminPIN) {
+      setAuthError('รหัสผ่าน PIN ไม่ถูกต้อง กรุณากรอกรหัสผ่าน Member PIN หรือ Admin PIN');
       return;
     }
 
+    const isSessionAdmin = inputPIN === adminPIN;
+
     setCurrentUser(member);
+    setIsAdmin(isSessionAdmin);
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(member));
+    localStorage.setItem('is_admin_session', isSessionAdmin ? 'true' : 'false');
     setAuthPIN('');
     setAuthError('');
   };
@@ -322,11 +318,7 @@ export default function App() {
     const newMember: Member = {
       id: `mem-${Date.now()}`,
       name: trimmedName,
-      role: 'member', // Default new registers are members
-      participatedWarsCount: 0,
-      hasReceivedInCycle: false,
-      joinedAt: new Date().toISOString().split('T')[0],
-      jobClass: regClass
+      del_flag: true
     };
 
     const updatedState = {
@@ -336,7 +328,9 @@ export default function App() {
 
     updateState(updatedState);
     setCurrentUser(newMember);
+    setIsAdmin(false);
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(newMember));
+    localStorage.setItem('is_admin_session', 'false');
     setRegName('');
     setAuthPIN('');
     setAuthError('');
@@ -344,11 +338,11 @@ export default function App() {
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setIsAdmin(false);
     localStorage.removeItem(USER_SESSION_KEY);
+    localStorage.removeItem('is_admin_session');
     setActiveTab('dashboard');
   };
-
-  const isAdmin = currentUser?.role === 'admin';
 
   // Render Login page if not authenticated
   if (!currentUser) {
@@ -425,9 +419,9 @@ export default function App() {
                     className="w-full bg-slate-950 text-slate-200 px-3.5 py-3 rounded-xl border border-slate-800 focus:outline-none focus:border-yellow-500 text-xs font-semibold"
                   >
                     <option value="">-- โปรดเลือกชื่อตัวละครของคุณ --</option>
-                    {state.members.map(m => (
+                    {state.members.filter(m => m.del_flag !== false).map(m => (
                       <option key={m.id} value={m.id}>
-                        {m.name} ({m.role === 'admin' ? 'Admin' : 'Member'})
+                        {m.name} ({m.admin ? 'Admin' : 'Member'})
                       </option>
                     ))}
                   </select>
@@ -470,23 +464,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-extrabold text-slate-400 block">เลือกอาชีพ (Class)</label>
-                {(() => {
-                  const jobClasses = state.jobClasses && state.jobClasses.length > 0 ? state.jobClasses : DEFAULT_JOB_CLASSES;
-                  return (
-                    <select
-                      value={regClass}
-                      onChange={e => setRegClass(e.target.value)}
-                      className="w-full bg-slate-950 text-slate-200 px-3.5 py-3 rounded-xl border border-slate-800 focus:outline-none focus:border-yellow-500 text-xs font-semibold"
-                    >
-                      {jobClasses.map(jc => (
-                        <option key={jc} value={jc}>{jc}</option>
-                      ))}
-                    </select>
-                  );
-                })()}
-              </div>
+
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">

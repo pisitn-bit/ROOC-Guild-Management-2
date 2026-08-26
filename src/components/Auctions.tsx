@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { GuildState, GuildEvent, EventDrop, MasterItem, Member, EventExcuse, DEFAULT_JOB_CLASSES } from '../types';
+import { GuildState, GuildEvent, EventDrop, MasterItem, Member } from '../types';
 import { 
   Calendar, 
   Plus, 
@@ -380,43 +380,17 @@ export default function Auctions({
     setSelectedDrops(selectedDrops.filter(d => d.masterItemId !== masterItemId));
   };
 
-  // Helper to check if a user is still within the 15-minute window of the 19:55 Bangkok start time (deadline: 19:40 Bangkok)
-  const checkCanExcuse = (eventDateStr: string): { canExcuse: boolean; deadlineStr: string } => {
-    // Event start time is 19:55 Asia/Bangkok
-    // 15 minutes before is 19:40 Asia/Bangkok
-    const targetTimeStr = `${eventDateStr}T19:40:00+07:00`;
-    const deadlineDate = new Date(targetTimeStr);
-    const now = new Date();
-    return {
-      canExcuse: now.getTime() < deadlineDate.getTime(),
-      deadlineStr: "19:40 น."
-    };
-  };
-
   // 3. User registers/joins an active event
-  const handleUserJoinEvent = (eventId: string, selectedJobClass?: string) => {
+  const handleUserJoinEvent = (eventId: string) => {
     if (!currentUser) return;
     
     const updatedEvents = events.map(e => {
       if (e.id === eventId) {
         const hasJoined = e.participants.includes(currentUser.id);
         const participants = hasJoined ? e.participants : [...e.participants, currentUser.id];
-        
-        // Remove from excuses if they rejoin
-        const excuses = e.excuses ? e.excuses.filter(exc => exc.memberId !== currentUser.id) : [];
-        const participantClasses = { ...(e.participantClasses || {}) };
-        
-        if (selectedJobClass) {
-          participantClasses[currentUser.id] = selectedJobClass;
-        } else if (!participantClasses[currentUser.id]) {
-          participantClasses[currentUser.id] = currentUser.jobClass || 'Lord Knight';
-        }
-
         return {
           ...e,
-          participants,
-          participantClasses,
-          excuses
+          participants
         };
       }
       return e;
@@ -426,93 +400,6 @@ export default function Auctions({
       ...state,
       events: updatedEvents
     });
-  };
-
-  // 3.0 User dynamically switches their job class for an active event
-  const handleUserSwitchClass = (eventId: string, targetClass: string) => {
-    if (!currentUser) return;
-    const updatedEvents = events.map(e => {
-      if (e.id === eventId) {
-        const participantClasses = { ...(e.participantClasses || {}) };
-        participantClasses[currentUser.id] = targetClass;
-        return {
-          ...e,
-          participantClasses
-        };
-      }
-      return e;
-    });
-
-    onUpdateState({
-      ...state,
-      events: updatedEvents
-    });
-  };
-
-  // 3.1 User excuses/leaves an active event
-  const handleUserExcuseEvent = (eventId: string, reason: string) => {
-    if (!currentUser) return;
-    if (!reason.trim()) {
-      triggerAlert('ผิดพลาด', 'กรุณากรอกเหตุผลการลา');
-      return;
-    }
-
-    const event = events.find(e => e.id === eventId);
-    if (!event) return;
-
-    // Check time again for safety
-    const { canExcuse, deadlineStr } = checkCanExcuse(event.date);
-    if (!canExcuse) {
-      triggerAlert('ไม่สามารถแจ้งลาได้', `เลยเวลากำหนดการแจ้งลาแล้ว (${deadlineStr} ของวันกิจกรรม)`);
-      return;
-    }
-
-    const updatedEvents = events.map(e => {
-      if (e.id === eventId) {
-        // Remove from participants
-        const participants = e.participants.filter(pid => pid !== currentUser.id);
-        
-        // Add or update excuse
-        const baseExcuses = e.excuses || [];
-        const filteredExcuses = baseExcuses.filter(exc => exc.memberId !== currentUser.id);
-        const newExcuse: EventExcuse = {
-          memberId: currentUser.id,
-          memberName: currentUser.name,
-          reason: reason.trim(),
-          timestamp: new Date().toISOString()
-        };
-
-        return {
-          ...e,
-          participants,
-          excuses: [...filteredExcuses, newExcuse]
-        };
-      }
-      return e;
-    });
-
-    onUpdateState({
-      ...state,
-      events: updatedEvents
-    });
-
-    // Notify Discord
-    onSendDiscordNotification(
-      `🚩 สมาชิกแจ้งขอลาเข้าร่วมกิจกรรม`,
-      `**${currentUser.name}** ได้แจ้งขอลาจากกิจกรรม **${event.title} ประจำวันที่ ${event.date}**`,
-      [
-        { name: 'ชื่อสมาชิก', value: currentUser.name, inline: true },
-        { name: 'อาชีพ', value: currentUser.jobClass || 'ไม่ระบุ', inline: true },
-        { name: 'กิจกรรมกิลด์', value: `${event.title} ประจำวันที่ ${event.date}`, inline: false },
-        { name: 'เหตุผลในการขอลา', value: reason.trim(), inline: false }
-      ],
-      15158332, // Red-ish color
-      undefined,
-      'leaves'
-    );
-
-    setExcuseEventId(null);
-    setExcuseReason('');
   };
 
   // 4. Admin toggles participants manually
@@ -524,18 +411,9 @@ export default function Auctions({
           ? e.participants.filter(pid => pid !== memberId)
           : [...e.participants, memberId];
         
-        const participantClasses = { ...(e.participantClasses || {}) };
-        if (!hasJoined) {
-          const m = members.find(mem => mem.id === memberId);
-          participantClasses[memberId] = m?.jobClass || 'Lord Knight';
-        } else {
-          delete participantClasses[memberId];
-        }
-
         return { 
           ...e, 
-          participants: updatedParticipants,
-          participantClasses
+          participants: updatedParticipants
         };
       }
       return e;
@@ -612,11 +490,6 @@ export default function Auctions({
     const finalDrops: EventDrop[] = [];
     let changed = false;
 
-    // Helper to get participant job class for this specific event
-    const getMemberJobClass = (m: Member) => {
-      return event.participantClasses?.[m.id] || m.jobClass || 'Lord Knight';
-    };
-
     // Helper to check if a drop should be averaged/split
     const shouldAverageDrop = (itemName: string) => {
       const name = itemName.toLowerCase();
@@ -646,9 +519,8 @@ export default function Auctions({
         const eventParticipantIds = event.participants;
         const eligibleParticipants = tempMembers.filter(m => {
           const isParticipant = eventParticipantIds.includes(m.id);
-          const matchesClass = !d.whitelistJobClasses || d.whitelistJobClasses.length === 0 || d.whitelistJobClasses.includes(getMemberJobClass(m));
           const matchesMember = !d.whitelistMemberIds || d.whitelistMemberIds.length === 0 || d.whitelistMemberIds.includes(m.id);
-          return isParticipant && matchesClass && matchesMember;
+          return isParticipant && matchesMember;
         });
 
         const targets = eligibleParticipants.length > 0 
@@ -707,9 +579,8 @@ export default function Auctions({
         const cleanParticipantsCount = tempMembers.filter(m => {
           const isParticipant = eventParticipantIds.includes(m.id);
           const hasNotReceived = !m.hasReceivedInCycle;
-          const matchesClass = !d.whitelistJobClasses || d.whitelistJobClasses.length === 0 || d.whitelistJobClasses.includes(getMemberJobClass(m));
           const matchesMember = !d.whitelistMemberIds || d.whitelistMemberIds.length === 0 || d.whitelistMemberIds.includes(m.id);
-          return isParticipant && hasNotReceived && matchesClass && matchesMember;
+          return isParticipant && hasNotReceived && matchesMember;
         }).length;
 
         // Rule: If remaining items is greater than clean participants, we allow those who already received items in this cycle to participate
@@ -719,9 +590,8 @@ export default function Auctions({
         let eligibleParticipants = tempMembers.filter(m => {
           const isParticipant = eventParticipantIds.includes(m.id);
           const hasNotReceived = !m.hasReceivedInCycle;
-          const matchesClass = !d.whitelistJobClasses || d.whitelistJobClasses.length === 0 || d.whitelistJobClasses.includes(getMemberJobClass(m));
           const matchesMember = !d.whitelistMemberIds || d.whitelistMemberIds.length === 0 || d.whitelistMemberIds.includes(m.id);
-          return isParticipant && (hasNotReceived || allowAlreadyReceived) && matchesClass && matchesMember;
+          return isParticipant && (hasNotReceived || allowAlreadyReceived) && matchesMember;
         });
 
         // What if all whitelisted participants of this event have already received items? (fallback fallback)
@@ -729,9 +599,8 @@ export default function Auctions({
           // Reset hasReceivedInCycle for whitelisted event participants to continue fairly
           tempMembers = tempMembers.map(m => {
             if (eventParticipantIds.includes(m.id)) {
-              const matchesClass = !d.whitelistJobClasses || d.whitelistJobClasses.length === 0 || d.whitelistJobClasses.includes(getMemberJobClass(m));
               const matchesMember = !d.whitelistMemberIds || d.whitelistMemberIds.length === 0 || d.whitelistMemberIds.includes(m.id);
-              if (matchesClass && matchesMember) {
+              if (matchesMember) {
                 return { ...m, hasReceivedInCycle: false };
               }
             }
@@ -740,9 +609,8 @@ export default function Auctions({
           eligibleParticipants = tempMembers.filter(m => {
             const isParticipant = eventParticipantIds.includes(m.id);
             const hasNotReceived = !m.hasReceivedInCycle;
-            const matchesClass = !d.whitelistJobClasses || d.whitelistJobClasses.length === 0 || d.whitelistJobClasses.includes(getMemberJobClass(m));
             const matchesMember = !d.whitelistMemberIds || d.whitelistMemberIds.length === 0 || d.whitelistMemberIds.includes(m.id);
-            return isParticipant && hasNotReceived && matchesClass && matchesMember;
+            return isParticipant && hasNotReceived && matchesMember;
           });
         }
 
@@ -750,9 +618,8 @@ export default function Auctions({
         if (eligibleParticipants.length === 0) {
           eligibleParticipants = tempMembers.filter(m => {
             const isParticipant = eventParticipantIds.includes(m.id);
-            const matchesClass = !d.whitelistJobClasses || d.whitelistJobClasses.length === 0 || d.whitelistJobClasses.includes(getMemberJobClass(m));
             const matchesMember = !d.whitelistMemberIds || d.whitelistMemberIds.length === 0 || d.whitelistMemberIds.includes(m.id);
-            return isParticipant && matchesClass && matchesMember;
+            return isParticipant && matchesMember;
           });
         }
 
@@ -1183,13 +1050,9 @@ export default function Auctions({
                 const isActive = event.status === 'active';
                 const hasJoined = currentUser ? event.participants.includes(currentUser.id) : false;
 
-                // Event participant members list with specific event job classes mapped
-                const participantMembers = members
-                  .filter(m => event.participants.includes(m.id))
-                  .map(m => {
-                    const eventJobClass = event.participantClasses?.[m.id];
-                    return eventJobClass ? { ...m, jobClass: eventJobClass } : m;
-                  });
+                                 // Event participant members list
+                 const participantMembers = members
+                   .filter(m => event.participants.includes(m.id));
 
                 return (
                   <div 
@@ -1243,129 +1106,23 @@ export default function Auctions({
                           </button>
                         )}
                         {isActive && currentUser && (() => {
-                          const hasExcusedObj = event.excuses?.find(exc => exc.memberId === currentUser.id);
-                          const { canExcuse, deadlineStr } = checkCanExcuse(event.date);
-
                           return (
                             <>
-                              {/* NOT JOINED & NOT EXCUSED */}
-                              {!hasJoined && !hasExcusedObj && (
-                                <div className="flex gap-2 flex-wrap items-center">
-                                  <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1 gap-1.5 shrink-0">
-                                    <span className="text-[10.5px] font-bold text-slate-400 pl-2">อาชีพที่จะเล่น:</span>
-                                    <select
-                                      value={selectedRegClasses[event.id] || currentUser.jobClass || 'Lord Knight'}
-                                      onChange={e => setSelectedRegClasses(prev => ({ ...prev, [event.id]: e.target.value }))}
-                                      className="bg-slate-900 text-slate-200 px-2 py-1.5 rounded-lg border border-slate-800 text-xs font-bold focus:outline-none focus:border-emerald-500 font-semibold"
-                                    >
-                                      {DEFAULT_JOB_CLASSES.map(jc => (
-                                        <option key={jc} value={jc}>{jc}</option>
-                                      ))}
-                                    </select>
-                                    <button
-                                      onClick={() => handleUserJoinEvent(event.id, selectedRegClasses[event.id] || currentUser.jobClass || 'Lord Knight')}
-                                      className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black px-4 py-1.5 rounded-lg text-xs transition-all duration-200 flex items-center gap-1 shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:scale-102 active:scale-98"
-                                    >
-                                      📝 ร่วมลงทะเบียน
-                                    </button>
-                                  </div>
-                                  
-                                  <button
-                                    onClick={() => {
-                                      if (!canExcuse) {
-                                        triggerAlert('ไม่สามารถแจ้งลาได้', `เลยเวลากำหนดการแจ้งลาแล้ว (${deadlineStr} ของวันกิจกรรม)`);
-                                        return;
-                                      }
-                                      setExcuseEventId(event.id);
-                                      setExcuseReason('');
-                                    }}
-                                    className={`font-bold px-3 py-2.5 rounded-xl text-xs transition-all duration-200 flex items-center gap-1.5 hover:scale-105 active:scale-95 ${
-                                      canExcuse 
-                                        ? 'bg-slate-800 hover:bg-slate-700 text-red-400 border border-red-500/10' 
-                                        : 'bg-slate-950 text-slate-600 cursor-not-allowed opacity-50 border border-slate-900'
-                                    }`}
-                                    title={!canExcuse ? `หมดเวลาการแจ้งลา (${deadlineStr})` : 'แจ้งลาล่วงหน้า'}
-                                  >
-                                    🚩 ขอแจ้งลา {(!canExcuse) && <span className="text-[10px] font-mono">({deadlineStr})</span>}
-                                  </button>
-                                </div>
+                              {/* NOT JOINED */}
+                              {!hasJoined && (
+                                <button
+                                  onClick={() => handleUserJoinEvent(event.id)}
+                                  className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black px-4 py-2.5 rounded-xl text-xs transition-all duration-200 flex items-center gap-1 shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:scale-102 active:scale-98"
+                                >
+                                  📝 ร่วมลงทะเบียนเข้าร่วมกิจกรรม
+                                </button>
                               )}
- 
+
                               {/* JOINED */}
                               {hasJoined && (
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="bg-slate-950 border border-emerald-500/20 text-emerald-400 font-extrabold px-3 py-2.5 rounded-xl text-xs flex items-center gap-1 shrink-0">
-                                    ✓ เข้าร่วมแล้ว
-                                  </span>
- 
-                                  {/* Dynamic class switching */}
-                                  <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1 gap-1.5 shrink-0">
-                                    <span className="text-[10.5px] font-bold text-slate-400 pl-2">อาชีพที่เล่น:</span>
-                                    <select
-                                      value={event.participantClasses?.[currentUser.id] || currentUser.jobClass || 'Lord Knight'}
-                                      onChange={e => handleUserSwitchClass(event.id, e.target.value)}
-                                      className="bg-slate-900 text-slate-200 px-2 py-1.5 rounded-lg border border-slate-800 text-xs font-bold focus:outline-none focus:border-blue-500 font-semibold"
-                                    >
-                                      {DEFAULT_JOB_CLASSES.map(jc => (
-                                        <option key={jc} value={jc}>{jc}</option>
-                                      ))}
-                                    </select>
-                                  </div>
- 
-                                  <button
-                                    onClick={() => {
-                                      if (!canExcuse) {
-                                        triggerAlert('ไม่สามารถแจ้งลาได้', `เลยเวลากำหนดการแจ้งลาแล้ว (${deadlineStr} ของวันกิจกรรม)`);
-                                        return;
-                                      }
-                                      setExcuseEventId(event.id);
-                                      setExcuseReason('');
-                                    }}
-                                    className={`font-bold px-3 py-2.5 rounded-xl text-xs transition-all duration-200 flex items-center gap-1.5 hover:scale-105 active:scale-95 ${
-                                      canExcuse 
-                                        ? 'bg-slate-800 hover:bg-slate-700 text-red-400 border border-red-500/10' 
-                                        : 'bg-slate-950 text-slate-650 cursor-not-allowed opacity-50 border border-slate-900'
-                                    }`}
-                                    title={!canExcuse ? `หมดเวลาการแจ้งลา (${deadlineStr})` : 'ต้องการแจ้งลา'}
-                                  >
-                                    🚩 ขอแจ้งลา {(!canExcuse) && <span className="text-[10px] font-mono">({deadlineStr})</span>}
-                                  </button>
-                                </div>
-                              )}
- 
-                              {/* EXCUSED */}
-                              {hasExcusedObj && (
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <div className="bg-slate-950 border border-red-500/20 p-2 rounded-xl text-left max-w-xs shrink-0">
-                                    <p className="text-red-400 font-black text-xs">🚩 คุณแจ้งขอลาแล้ว</p>
-                                    <p className="text-[10px] text-slate-400 truncate mt-0.5" title={hasExcusedObj.reason}>เหตุผล: {hasExcusedObj.reason}</p>
-                                  </div>
- 
-                                  {canExcuse ? (
-                                    <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1 gap-1.5 shrink-0">
-                                      <span className="text-[10.5px] font-bold text-slate-400 pl-2">อาชีพที่จะเล่น:</span>
-                                      <select
-                                        value={selectedRegClasses[event.id] || currentUser.jobClass || 'Lord Knight'}
-                                        onChange={e => setSelectedRegClasses(prev => ({ ...prev, [event.id]: e.target.value }))}
-                                        className="bg-slate-900 text-slate-200 px-2 py-1.5 rounded-lg border border-slate-800 text-xs font-bold focus:outline-none focus:border-emerald-500 font-semibold"
-                                      >
-                                        {DEFAULT_JOB_CLASSES.map(jc => (
-                                          <option key={jc} value={jc}>{jc}</option>
-                                        ))}
-                                      </select>
-                                      <button
-                                        onClick={() => handleUserJoinEvent(event.id, selectedRegClasses[event.id] || currentUser.jobClass || 'Lord Knight')}
-                                        className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black px-3.5 py-1.5 rounded-lg text-xs transition-all duration-200 flex items-center gap-1 shadow-[0_0_15px_rgba(16,185,129,0.2)] hover:scale-102 active:scale-98"
-                                      >
-                                        📝 กลับมาร่วมเล่น
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <span className="text-[11px] text-slate-500 font-bold italic bg-slate-950 border border-slate-900/60 px-3 py-2.5 rounded-xl cursor-not-allowed shrink-0" title={`หมดเวลาเปลี่ยนใจกลับมาร่วมกิจกรรมแล้ว (หลัง ${deadlineStr})`}>
-                                      🔒 หมดเวลาเข้าร่วม ({deadlineStr})
-                                    </span>
-                                  )}
-                                </div>
+                                <span className="bg-slate-950 border border-emerald-500/20 text-emerald-400 font-extrabold px-3 py-2.5 rounded-xl text-xs flex items-center gap-1 shrink-0">
+                                  ✓ เข้าร่วมแล้ว
+                                </span>
                               )}
                             </>
                           );
@@ -1382,46 +1139,6 @@ export default function Auctions({
                         )}
                       </div>
                     </div>
-
-                    {/* Inline Excuse Form overlay/card */}
-                    {excuseEventId === event.id && (
-                      <div className="bg-slate-950 border-2 border-red-500/30 rounded-2xl p-4 space-y-3 animate-fadeIn">
-                        <div className="flex justify-between items-center">
-                          <h4 className="text-xs font-bold text-red-400 flex items-center gap-1.5">
-                            <AlertCircle className="w-4 h-4" />
-                            กรอกเหตุผลการลาสำหรับ {event.title}
-                          </h4>
-                          <button 
-                            onClick={() => {
-                              setExcuseEventId(null);
-                              setExcuseReason('');
-                            }}
-                            className="text-slate-400 hover:text-slate-200"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <p className="text-[11px] text-slate-400">
-                          * กรุณากรอกเหตุผลเพื่อบันทึกและส่งรายงานแจ้งเตือนเข้าสู่ระบบ Discord ของสมาคมกิลด์
-                        </p>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <input
-                            type="text"
-                            required
-                            placeholder="ระบุเหตุผลการลา (เช่น ติดโอทีงานประจำ, เดินทางต่างจังหวัด)..."
-                            value={excuseReason}
-                            onChange={e => setExcuseReason(e.target.value)}
-                            className="flex-grow bg-slate-900 text-slate-200 px-3 py-2.5 rounded-xl border border-slate-800 text-xs font-bold focus:outline-none focus:border-red-500"
-                          />
-                          <button
-                            onClick={() => handleUserExcuseEvent(event.id, excuseReason)}
-                            className="bg-red-600 hover:bg-red-500 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs transition-colors shadow-md flex items-center justify-center shrink-0"
-                          >
-                            ยืนยันการลา
-                          </button>
-                        </div>
-                      </div>
-                    )}
 
                     {/* Participants Section */}
                     <div className="bg-slate-950/50 rounded-2xl p-4 border border-slate-850/60 space-y-3">
@@ -1483,7 +1200,7 @@ export default function Auctions({
                                     : 'bg-blue-950/20 border-blue-500/10 text-slate-300'
                                 }`}
                               >
-                                {m.hasReceivedInCycle ? `✓ ${m.name}` : `🌟 ${m.name}`} <span className="text-[9px] opacity-75 font-mono">({m.jobClass || 'Lord Knight'})</span>
+                                {m.hasReceivedInCycle ? `✓ ${m.name}` : `🌟 ${m.name}`}
                               </span>
                             ))}
                           </div>
@@ -1491,30 +1208,7 @@ export default function Auctions({
                       )}
                     </div>
 
-                    {/* Excuses Section */}
-                    {event.excuses && event.excuses.length > 0 && (
-                      <div className="bg-red-950/10 rounded-2xl p-4 border border-red-950/45 space-y-2">
-                        <h4 className="text-xs font-bold text-red-400 flex items-center gap-1.5">
-                          <AlertCircle className="w-4 h-4" />
-                          รายชื่อผู้ขอลาล่วงหน้า ({event.excuses.length} คน)
-                        </h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {event.excuses.map((exc, eIdx) => (
-                            <div key={eIdx} className="bg-slate-950/60 p-2.5 rounded-xl border border-red-500/10 flex flex-col justify-between text-xs font-sans">
-                              <div className="flex justify-between items-center">
-                                <span className="font-extrabold text-red-400">{exc.memberName}</span>
-                                <span className="text-[9px] text-slate-500 font-mono">
-                                  {new Date(exc.timestamp).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-slate-300 mt-1 bg-slate-900 p-1.5 rounded-lg border border-slate-850/30">
-                                <span className="text-slate-500 font-bold">เหตุผล: </span>{exc.reason}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+
 
                     {/* Visual Queue Board */}
                     {event.participants.length > 0 && (
@@ -1635,28 +1329,12 @@ export default function Auctions({
                   const activeParticipants = members.filter(m => activeEvent.participants.includes(m.id));
                   const totalCount = activeParticipants.length;
 
-                  // 1. Group Roles Distribution
-                  const tanksCount = activeParticipants.filter(m => ['Lord Knight', 'Paladin'].includes(m.jobClass || '')).length;
-                  const supportCount = activeParticipants.filter(m => ['High Priest', 'Scholar', 'Creator', 'Gypsy', 'Clown'].includes(m.jobClass || '')).length;
-                  const dpsCount = totalCount - tanksCount - supportCount;
-
-                  const tankPct = totalCount ? Math.round((tanksCount / totalCount) * 100) : 0;
-                  const supportPct = totalCount ? Math.round((supportCount / totalCount) * 100) : 0;
-                  const dpsPct = totalCount ? Math.round((dpsCount / totalCount) * 100) : 0;
-
-                  // 2. Class distribution count
-                  const classCounts: { [key: string]: number } = {};
-                  activeParticipants.forEach(p => {
-                    const cls = p.jobClass || 'Lord Knight';
-                    classCounts[cls] = (classCounts[cls] || 0) + 1;
-                  });
-
-                  const sortedClasses = Object.entries(classCounts).sort((a, b) => b[1] - a[1]);
+                  // Job class system removed
 
                   return (
                     <div className="space-y-5">
                       <div className="bg-slate-950/60 p-3.5 border border-slate-850 rounded-2xl space-y-1">
-                        <span className="text-[9px] text-yellow-500 font-extrabold block uppercase tracking-wider">กำลังวิเคราะห์รอบกิจกรรม</span>
+                        <span className="text-[9px] text-yellow-500 font-extrabold block uppercase tracking-wider">กำลังสรุปรอบกิจกรรม</span>
                         <span className="text-xs font-bold text-slate-200 block truncate">{activeEvent.title}</span>
                         <div className="flex justify-between items-center pt-2 text-xs font-bold">
                           <span className="text-slate-400">ผู้เข้าร่วมทั้งหมด:</span>
@@ -1664,80 +1342,9 @@ export default function Auctions({
                         </div>
                       </div>
 
-                      {/* Role Breakdown */}
-                      <div className="space-y-3">
-                        <h4 className="text-[11px] font-extrabold text-slate-300 uppercase tracking-wider">🛡️ สัดส่วนหน้าที่หลัก (Combat Roles)</h4>
-                        
-                        {/* Tank */}
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-blue-400 font-bold">🛡️ Tank/Frontline (Paladin, LK)</span>
-                            <span className="text-slate-300 font-mono">{tanksCount} คน ({tankPct}%)</span>
-                          </div>
-                          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-850/50">
-                            <div className="bg-blue-500 h-full rounded-full transition-all duration-500" style={{ width: `${tankPct}%` }}></div>
-                          </div>
-                        </div>
-
-                        {/* Damage Dealers */}
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-red-400 font-bold">⚔️ Damage Dealers (DPS/Nuker)</span>
-                            <span className="text-slate-300 font-mono">{dpsCount} คน ({dpsPct}%)</span>
-                          </div>
-                          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-850/50">
-                            <div className="bg-red-500 h-full rounded-full transition-all duration-500" style={{ width: `${dpsPct}%` }}></div>
-                          </div>
-                        </div>
-
-                        {/* Support */}
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-emerald-400 font-bold">📿 Support/Utility (Priest, Scholar, Creator)</span>
-                            <span className="text-slate-300 font-mono">{supportCount} คน ({supportPct}%)</span>
-                          </div>
-                          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-850/50">
-                            <div className="bg-emerald-500 h-full rounded-full transition-all duration-500" style={{ width: `${supportPct}%` }}></div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Class Distribution List */}
-                      <div className="space-y-3 pt-2">
-                        <h4 className="text-[11px] font-extrabold text-slate-300 uppercase tracking-wider">📊 สถิติแบ่งแยกตามอาชีพ (Class Distribution)</h4>
-                        
-                        {sortedClasses.length === 0 ? (
-                          <p className="text-xs text-slate-500 italic py-2 text-center bg-slate-950/40 rounded-xl border border-slate-850">ไม่มีข้อมูลอาชีพลงวอร์ในขณะนี้</p>
-                        ) : (
-                          <div className="space-y-2.5 max-h-[250px] overflow-y-auto pr-1">
-                            {sortedClasses.map(([cls, count]) => {
-                              const pct = Math.round((count / totalCount) * 100);
-                              return (
-                                <div key={cls} className="space-y-1">
-                                  <div className="flex justify-between text-xs">
-                                    <span className="text-slate-300 font-semibold">{cls}</span>
-                                    <span className="text-slate-400 font-bold font-mono">{count} คน ({pct}%)</span>
-                                  </div>
-                                  <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
-                                    <div className="bg-yellow-500/80 h-full rounded-full" style={{ width: `${pct}%` }}></div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Inequality Check */}
                       <div className="bg-slate-950/40 p-3 border border-slate-850 rounded-2xl text-[10.5px] leading-relaxed text-slate-400 space-y-1">
-                        <span className="font-bold text-slate-300 block">💡 ข้อแนะนำสำหรับหัวหน้ากิลด์:</span>
-                        {supportPct < 15 ? (
-                          <p className="text-amber-500">⚠️ จำนวนผู้เล่นสายซัพพอร์ตต่ำกว่าเกณฑ์ (15%) ควรหมุนสล็อตเพิ่ม High Priest หรือ Scholar เพื่อประคองแนวหลังในวอร์</p>
-                        ) : tankPct < 15 ? (
-                          <p className="text-blue-400">⚠️ ยอดแนวหน้า/แทงก์ ค่อนข้างบาง แนะนำให้เสริมกำลังแถวหน้าเพื่อชนดันตอนบอส OverRun โจมตี</p>
-                        ) : (
-                          <p className="text-emerald-400">✓ สัดส่วนกำลังพลลงกิจกรรมมีความสมดุลดีเยี่ยม พร้อมลุยศึกทั้ง Guild League และบอส OverRun!</p>
-                        )}
+                        <span className="font-bold text-slate-300 block">💡 ข้อมูลการจัดสรร:</span>
+                        <p className="text-emerald-400">ระบบคิวจัดสรรจะทำงานสอดคล้องกับกฎความเท่าเทียม (Fair-Play Priority Queue) โดยจัดลำดับคิวและสิทธิ์ปันผลให้กับสมาชิกที่เข้าร่วมสม่ำเสมอที่สุดเพื่อความโปร่งใสในกิลด์</p>
                       </div>
                     </div>
                   );

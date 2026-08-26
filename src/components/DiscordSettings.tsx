@@ -8,7 +8,8 @@ import {
   CheckCircle, 
   AlertCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Users
 } from 'lucide-react';
 
 interface DiscordSettingsProps {
@@ -32,6 +33,10 @@ export default function DiscordSettings({
   const [webhookUrlRaffles, setWebhookUrlRaffles] = useState(state.discordConfig.webhookUrlRaffles || '');
   const [botName, setBotName] = useState(state.discordConfig.botName || '');
   const [enabled, setEnabled] = useState(state.discordConfig.enabled);
+  const [botToken, setBotToken] = useState(state.discordConfig.botToken || '');
+  const [guildId, setGuildId] = useState(state.discordConfig.guildId || '');
+  const [autoSync, setAutoSync] = useState(state.discordConfig.autoSync || false);
+  const [checkInChannelId, setCheckInChannelId] = useState(state.discordConfig.checkInChannelId || '');
 
   const [showWebhook, setShowWebhook] = useState(false);
   const [testStatus, setTestStatus] = useState<{ type: 'success' | 'error' | null; message: string }>({ type: null, message: '' });
@@ -45,7 +50,6 @@ export default function DiscordSettings({
     }
   };
 
-  // 1. Save discord configuration
   const handleSaveConfig = () => {
     onUpdateState({
       ...state,
@@ -55,7 +59,11 @@ export default function DiscordSettings({
         webhookUrlEvents: webhookUrlEvents.trim(),
         webhookUrlRaffles: webhookUrlRaffles.trim(),
         botName: botName.trim(),
-        enabled
+        enabled,
+        botToken: botToken.trim(),
+        guildId: guildId.trim(),
+        autoSync,
+        checkInChannelId: checkInChannelId.trim()
       }
     });
     triggerAlert('สำเร็จ', 'บันทึกการตั้งค่า Discord สำเร็จแล้ว !');
@@ -245,6 +253,82 @@ export default function DiscordSettings({
               />
             </div>
 
+            {/* Discord Bot Member Sync Settings Block */}
+            <div className="border-t border-slate-800 pt-4 mt-4 space-y-3.5">
+              <h3 className="font-bold text-xs text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
+                <Users className="w-4 h-4 text-emerald-400" />
+                ตั้งค่าระบบซิงค์รายชื่อสมาชิก (Discord Member Sync Bot)
+              </h3>
+              
+              <div className="space-y-1.5">
+                <label className="text-xs font-black text-slate-300 flex items-center gap-1">
+                  🔑 Discord Bot Token
+                </label>
+                <input
+                  type={showWebhook ? "text" : "password"}
+                  disabled={!isAdmin}
+                  placeholder={isAdmin ? "ใส่ Bot Token ของดิสคอร์ดบอทที่นี่" : "มีโทเค็นบอทบันทึกในระบบแล้ว"}
+                  value={botToken}
+                  onChange={e => setBotToken(e.target.value)}
+                  className="w-full bg-slate-950 text-slate-200 px-3 py-2.5 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-500">
+                  โทเค็นบอทจาก Discord Developer Portal (จำเป็นต้องเปิดใช้ Server Members Intent)
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-black text-slate-300 flex items-center gap-1">
+                  🆔 Server ID (Guild ID)
+                </label>
+                <input
+                  type="text"
+                  disabled={!isAdmin}
+                  placeholder="เช่น 123456789012345678"
+                  value={guildId}
+                  onChange={e => setGuildId(e.target.value)}
+                  className="w-full bg-slate-950 text-slate-200 px-3 py-2.5 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-500">
+                  ไอดีของดิสคอร์ดเซิร์ฟเวอร์ (คลิกขวาที่ชื่อเซิร์ฟเวอร์ดิสคอร์ดแล้วเลือก Copy Server ID)
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-black text-slate-300 flex items-center gap-1">
+                  💬 ช่องสำหรับเช็คอินกิลด์วอร์ (Check-In Channel ID)
+                </label>
+                <input
+                  type="text"
+                  disabled={!isAdmin}
+                  placeholder="เช่น 123456789012345678"
+                  value={checkInChannelId}
+                  onChange={e => setCheckInChannelId(e.target.value)}
+                  className="w-full bg-slate-950 text-slate-200 px-3 py-2.5 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-500">
+                  ไอดีช่องสำหรับให้บอทส่งปุ่ม มาวอร์/ลา และรับการพิมพ์คำสั่งเช็คอิน `/check` เพื่อนำรายชื่อเข้าคิว
+                </p>
+              </div>
+
+              {/* Toggles for Bot Sync */}
+              <div className="grid grid-cols-1 gap-3.5">
+                <div className="flex items-center justify-between p-3 bg-slate-950/60 rounded-xl border border-slate-850">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-slate-200 block">อัปเดตสมาชิกอัตโนมัติ</span>
+                    <span className="text-[9px] text-slate-500 block">ซิงค์อัตโนมัติเมื่อเปิดหน้าทำเนียบ</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    disabled={!isAdmin}
+                    checked={autoSync}
+                    onChange={e => setAutoSync(e.target.checked)}
+                    className="w-9 h-4 bg-slate-800 checked:bg-emerald-500 rounded-full cursor-pointer accent-emerald-500"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Save & Test Buttons */}
             {isAdmin ? (
               <div className="pt-2 flex gap-3">
@@ -323,6 +407,38 @@ export default function DiscordSettings({
                 💡 ข้อดี: สมาชิกในห้องแชทจะเห็นภาพรวมการประมูล ราคาปิด และคนชนะทันทีโดยไม่ต้องเข้าแอปตลอดเวลา ช่วยเพิ่มความโปร่งใสและกระตุ้นการร่วมสงครามอย่างยิ่งยวด !
               </p>
             </div>
+          </div>
+
+          {/* Sync Bot Instructions */}
+          <div className="bg-slate-900 border border-slate-800/80 rounded-2xl p-5 space-y-3.5 text-xs text-slate-300 leading-relaxed">
+            <h3 className="font-bold text-slate-250 flex items-center gap-1">
+              <HelpCircle className="w-4 h-4 text-emerald-500" />
+              วิธีติดตั้ง Discord Bot สำหรับซิงค์รายชื่อสมาชิก
+            </h3>
+            
+            <ol className="list-decimal pl-4 space-y-2 text-slate-400">
+              <li>
+                ไปที่เว็บ <strong>Discord Developer Portal</strong> (discord.com/developers/applications)
+              </li>
+              <li>
+                กด <strong>"New Application"</strong> และตั้งชื่อ เช่น <code>RO Guild Sync Bot</code>
+              </li>
+              <li>
+                ไปที่แถบ <strong>"Bot"</strong> จากนั้นกดปุ่ม <strong>"Reset Token"</strong> เพื่อคัดลอกโทเค็น (Bot Token) มาใส่ในระบบจัดการ
+              </li>
+              <li>
+                เลื่อนลงมาด้านล่างในหัวข้อ <strong>"Privileged Gateway Intents"</strong> แล้วเปิดใช้งานสิทธิ์ <strong>"Server Members Intent"</strong> (จำเป็นมาก ⚠️) จากนั้นบันทึกการตั้งค่า
+              </li>
+              <li>
+                ไปที่แถบ <strong>"OAuth2"</strong> &gt; <strong>"URL Generator"</strong>
+              </li>
+              <li>
+                ในช่อง Scope เลือก <code>bot</code> และใน Bot Permissions เลือก <code>Manage Roles</code> หรือ <code>Read Members</code> จากนั้นคัดลอกลิงก์ด้านล่างเพื่อเปิดเบราว์เซอร์เชิญบอทเข้าสู่เซิร์ฟเวอร์ดิสคอร์ดกิลด์
+              </li>
+              <li>
+                คัดลอก <strong>Server ID (Guild ID)</strong> มาใส่ในระบบจัดการและกดบันทึกการตั้งค่า !
+              </li>
+            </ol>
           </div>
         </div>
 

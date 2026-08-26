@@ -1,19 +1,18 @@
 export interface Member {
   id: string;
   name: string;
-  role: 'admin' | 'member';
-  participatedWarsCount: number;
-  hasReceivedInCycle: boolean; // ได้รับของประมูลในรอบ/วัฏจักรนี้หรือยัง (สิทธิ์จะรีเซ็ตเมื่อทุกคนได้ครบ)
-  joinedAt: string;
-  jobClass?: string; // อาชีพตัวละคร เช่น Lord Knight, High Priest
+  del_flag: boolean;
+  discordId?: string;
+  participatedWarsCount?: number;
+  hasReceivedInCycle?: boolean;
 }
 
 export interface MasterItem {
   id: string;
   name: string;
   itemType: 'material' | 'card' | 'equip' | 'consumable';
-  whitelistJobClasses?: string[]; // อาชีพที่ได้รับสิทธิ์ Whitelist
   whitelistMemberIds?: string[]; // สมาชิกที่ได้รับสิทธิ์ Whitelist
+  del_flag?: boolean; // สถานะการใช้งาน (เปิด=true / ปิด=false)
 }
 
 export interface EventDrop {
@@ -23,19 +22,11 @@ export interface EventDrop {
   assignedToMemberId: string | null; // สมาชิกที่ประมูลได้/จัดสรรให้
   assignedToMemberName: string | null;
   bidAmount: number; // ราคาประมูล
-  whitelistJobClasses?: string[]; // อาชีพที่ได้รับสิทธิ์ Whitelist
   whitelistMemberIds?: string[]; // สมาชิกที่ได้รับสิทธิ์ Whitelist
   originalDropId?: string; // ไอดีไอเทมดั้งเดิมก่อนแบ่งเฉลี่ย
   isSplit?: boolean; // ระบุว่าเป็นไอเทมที่ถูกเฉลี่ยแบ่งมาจากชิ้นใหญ่
   originalQuantity?: number; // จำนวนดั้งเดิมก่อนการแบ่ง
   cycle?: number; // รอบวัฏจักรที่ได้รับรางวัลนี้
-}
-
-export interface EventExcuse {
-  memberId: string;
-  memberName: string;
-  reason: string;
-  timestamp: string;
 }
 
 export interface GuildEvent {
@@ -44,17 +35,35 @@ export interface GuildEvent {
   type: 'league' | 'overrun';
   date: string;
   participants: string[]; // รายชื่อ Member.id ที่เข้าร่วมกิจกรรมนี้
-  participantClasses?: { [memberId: string]: string }; // รายชื่ออาชีพเฉพาะกิจคราวนั้นๆ: { [memberId]: jobClass }
-  excuses?: EventExcuse[]; // รายชื่อผู้ขอลาพร้อมเหตุผล
   drops: EventDrop[]; // รายการของที่ดรอปและถูกประมูลในรอบนี้
   status: 'active' | 'completed';
   completedAt?: string; // เวลาสิ้นสุดกิจกรรม
+  checkInCode?: string; // รหัสเช็คอินสุ่ม 6 หลักสำหรับบอท Discord
+  checkInMessageId?: string; // ไอดีข้อความปุ่มกดที่บอทส่งไปใน Discord
+  checkInThreadId?: string; // ไอดี Thread/Post สำหรับ Discord Forum
+  
+  // โครงสร้างที่ 2 สำหรับการย้ายฐานข้อมูล (Migration):
+  event_name?: string;
+  event_date?: string;
+  member_array?: string[];
+  item_id?: string;
+  item_Qty?: number;
+  details?: string;
+  del_flag?: boolean;
 }
 
 export interface RafflePrize {
   id: string;
   name: string;
   quantity: number;
+}
+
+export interface HistoryLog {
+  id: string;
+  id_member: string; // ID ของสมาชิกกิลด์
+  id_event: string;  // ID ของกิจกรรมกิลด์วอร์
+  count_Receive: number; // จำนวนของที่ได้รับ (แต้มรับ/จำนวนชิ้น)
+  del_flag: boolean; // สถานะการล็อกอินประวัติ
 }
 
 export interface RaffleResult {
@@ -73,6 +82,11 @@ export interface DiscordConfig {
   webhookUrlLeaves?: string;
   webhookUrlEvents?: string;
   webhookUrlRaffles?: string;
+  botToken?: string;
+  guildId?: string;
+  autoSync?: boolean;
+  lastSyncTime?: string;
+  checkInChannelId?: string; // ไอดีช่องแชทสำหรับส่งปุ่มเช็คอินและรับโค้ดสุ่ม
 }
 
 export interface GuildState {
@@ -87,7 +101,7 @@ export interface GuildState {
   adminPIN?: string;
   guildGuidelines?: string; // กฎเกณฑ์และข้อตกลงกิลด์
   lastUpdated: string;
-  jobClasses?: string[]; // รายชื่ออาชีพกำหนดเองสำหรับกิลด์
+  historyLogs?: HistoryLog[]; // ตารางประวัติและจัดสรร (อิงตามรูปโครงสร้างที่ 2)
   currentCycle?: number; // รอบวัฏจักรประมูลปัจจุบัน
 }
 

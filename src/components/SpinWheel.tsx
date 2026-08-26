@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GuildState, Member, RafflePrize, RaffleResult, GuildEvent, EventDrop, DEFAULT_JOB_CLASSES } from '../types';
+import { GuildState, Member, RafflePrize, RaffleResult, GuildEvent, EventDrop } from '../types';
 import { 
   Gift, 
   Users, 
@@ -97,8 +97,7 @@ export default function SpinWheel({
           assignedToMemberId: null,
           assignedToMemberName: null,
           bidAmount: 0,
-          whitelistJobClasses: masterItem?.whitelistJobClasses || [],
-          whitelistMemberIds: masterItem?.whitelistMemberIds || []
+                    whitelistMemberIds: masterItem?.whitelistMemberIds || []
         };
         return {
           ...ev,
@@ -138,8 +137,7 @@ export default function SpinWheel({
     const drop = event?.drops?.find(d => d.id === dropId);
     if (drop) {
       setWhitelistTargetDrop({ eventId, dropId });
-      setSelectedWhitelistClasses(drop.whitelistJobClasses || []);
-      setSelectedWhitelistMembers(drop.whitelistMemberIds || []);
+            setSelectedWhitelistMembers(drop.whitelistMemberIds || []);
       setIsWhitelistModalOpen(true);
     }
   };
@@ -156,8 +154,7 @@ export default function SpinWheel({
             if (d.id === dropId) {
               return {
                 ...d,
-                whitelistJobClasses: selectedWhitelistClasses,
-                whitelistMemberIds: selectedWhitelistMembers
+                                whitelistMemberIds: selectedWhitelistMembers
               };
             }
             return d;
@@ -460,6 +457,16 @@ export default function SpinWheel({
   const rafflePrizes = state.rafflePrizes || [];
   const raffleResults = state.raffleResults || [];
 
+  // Dynamically calculate which members have received an item in this cycle
+  const receivedIds = new Set<string>();
+  events.forEach(e => {
+    e.drops?.forEach(d => {
+      if (d.assignedToMemberId && d.cycle === state.currentCycle) {
+        receivedIds.add(d.assignedToMemberId);
+      }
+    });
+  });
+
   // Update selected participants when selectedEventId or events change
   useEffect(() => {
     if (selectedEventId === 'all') {
@@ -480,8 +487,7 @@ export default function SpinWheel({
   // Helper to count how many items a member has been assigned in the selected event (or cycle)
   const getAssignedCount = (memberId: string) => {
     if (selectedEventId === 'all') {
-      const member = members.find(m => m.id === memberId);
-      return member?.hasReceivedInCycle ? 1 : 0;
+      return receivedIds.has(memberId) ? 1 : 0;
     }
     const currentEvent = events.find(e => e.id === selectedEventId);
     if (!currentEvent) return 0;
@@ -515,7 +521,7 @@ export default function SpinWheel({
 
     // 2. Filter candidates by hasReceivedInCycle priority
     // Priority 1: members who have NOT received in cycle
-    const priority1 = candidates.filter(m => !m.hasReceivedInCycle);
+    const priority1 = candidates.filter(m => !receivedIds.has(m.id));
     if (priority1.length > 0) {
       return priority1;
     }
@@ -723,7 +729,6 @@ export default function SpinWheel({
 
     let prizeNameStr = customPrizeName || 'รางวัลสุ่มวงล้อ';
     let updatedEvents = [...events];
-    let updatedMembers = [...members];
 
     const shouldAverageDrop = (itemName: string) => {
       const name = itemName.toLowerCase();
@@ -800,19 +805,7 @@ export default function SpinWheel({
           }
           return ev;
         });
-
-        // Mark the member as received in cycle
-        updatedMembers = members.map(m => m.id === wheelWinner.id ? {
-          ...m,
-          hasReceivedInCycle: true
-        } : m);
       }
-    } else {
-      // If no event, just mark hasReceivedInCycle
-      updatedMembers = members.map(m => m.id === wheelWinner.id ? {
-        ...m,
-        hasReceivedInCycle: true
-      } : m);
     }
 
     const newResult: RaffleResult = {
@@ -826,7 +819,6 @@ export default function SpinWheel({
 
     onUpdateState({
       ...state,
-      members: updatedMembers,
       raffleResults: [newResult, ...raffleResults],
       events: updatedEvents
     });
@@ -942,7 +934,7 @@ export default function SpinWheel({
               <div className="max-h-48 overflow-y-auto space-y-1 border border-slate-950 p-2 rounded-xl bg-slate-950/50">
                 {members.map(member => {
                   const isChecked = participants.includes(member.id);
-                  const meetsFilter = !excludeReceived || !member.hasReceivedInCycle;
+                  const meetsFilter = !excludeReceived || !receivedIds.has(member.id);
                   
                   if (selectedEventId !== 'all' && !events.find(e => e.id === selectedEventId)?.participants.includes(member.id)) {
                     return null; // Only show event participants if an event is selected
@@ -971,12 +963,11 @@ export default function SpinWheel({
                           className="accent-blue-500 w-3.5 h-3.5"
                         />
                         <span>{member.name}</span>
-                        <span className="text-[9px] text-slate-400 font-normal">({member.jobClass || 'Lord Knight'})</span>
                       </div>
                       <span className={`text-[9.5px] px-1.5 py-0.2 rounded font-semibold font-mono ${
-                        member.hasReceivedInCycle ? 'bg-red-950/40 text-red-400' : 'bg-emerald-950/40 text-emerald-400'
+                        receivedIds.has(member.id) ? 'bg-red-950/40 text-red-400' : 'bg-emerald-950/40 text-emerald-400'
                       }`}>
-                        {member.hasReceivedInCycle ? 'ได้ของแล้ว' : 'มีสิทธิ์คิว'}
+                        {receivedIds.has(member.id) ? 'ได้ของแล้ว' : 'มีสิทธิ์คิว'}
                       </span>
                     </label>
                   );
@@ -1084,7 +1075,7 @@ export default function SpinWheel({
                           ) : (
                             <div className="space-y-1 max-h-48 overflow-y-auto">
                               {activeEvent.drops.map(drop => {
-                                const totalWhitelistCount = (drop.whitelistJobClasses?.length || 0) + (drop.whitelistMemberIds?.length || 0);
+                                const totalWhitelistCount = drop.whitelistMemberIds?.length || 0;
                                 return (
                                   <div key={drop.id} className="p-2.5 bg-slate-950/40 rounded-xl border border-slate-850/60 text-[11px] space-y-1.5 animate-fade-in">
                                     <div className="flex justify-between items-center">
@@ -1125,11 +1116,7 @@ export default function SpinWheel({
                                     </div>
                                     {totalWhitelistCount > 0 && (
                                       <div className="flex flex-wrap gap-1 pt-1.5 border-t border-slate-850/30">
-                                        {drop.whitelistJobClasses?.map(jc => (
-                                          <span key={jc} className="bg-slate-900 border border-slate-800 text-[9px] text-slate-400 font-semibold px-1.5 py-0.5 rounded">
-                                            🛡️ {jc}
-                                          </span>
-                                        ))}
+                                        
                                         {drop.whitelistMemberIds?.map(mId => {
                                           const mName = state.members.find(m => m.id === mId)?.name || 'Unknown';
                                           return (
@@ -1194,7 +1181,7 @@ export default function SpinWheel({
                         ) : (
                           <div className="grid grid-cols-1 gap-1.5 max-h-56 overflow-y-auto">
                             {activeEvent.drops.map(drop => {
-                              const totalWhitelistCount = (drop.whitelistJobClasses?.length || 0) + (drop.whitelistMemberIds?.length || 0);
+                              const totalWhitelistCount = drop.whitelistMemberIds?.length || 0;
                               return (
                                 <div key={drop.id} className="p-2.5 bg-slate-950/30 rounded-xl border border-slate-850/40 space-y-1.5">
                                   <div className="flex justify-between items-center">
@@ -1210,11 +1197,7 @@ export default function SpinWheel({
                                   </div>
                                   {totalWhitelistCount > 0 && (
                                     <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-850/30">
-                                      {drop.whitelistJobClasses?.map(jc => (
-                                        <span key={jc} className="bg-slate-900/60 border border-slate-800 text-[9px] text-slate-400 font-semibold px-1.5 py-0.2 rounded">
-                                          🛡️ {jc}
-                                        </span>
-                                      ))}
+                                      
                                       {drop.whitelistMemberIds?.map(mId => {
                                         const mName = state.members.find(m => m.id === mId)?.name || 'Unknown';
                                         return (
@@ -1462,52 +1445,12 @@ export default function SpinWheel({
                 const drop = event?.drops?.find(d => d.id === whitelistTargetDrop.dropId);
                 if (!drop) return null;
 
-                const jobClassesList = state.jobClasses && state.jobClasses.length > 0 ? state.jobClasses : DEFAULT_JOB_CLASSES;
-
+                
                 return (
                   <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
                     <div className="bg-slate-950 p-3 rounded-xl border border-slate-850 flex justify-between items-center">
                       <span className="font-extrabold text-blue-400 text-[13px]">💎 {drop.itemName}</span>
                       <span className="bg-slate-900 text-slate-400 px-2.5 py-0.5 rounded text-[10px] font-mono">จำนวน {drop.quantity} ชิ้น</span>
-                    </div>
-
-                    {/* 1. Job Class Whitelist */}
-                    <div className="space-y-2">
-                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">1. กรองสิทธิ์ตามอาชีพ (Job Class Whitelist):</span>
-                      <p className="text-[9px] text-slate-500 leading-normal">
-                        *หากไม่มีการเลือกอาชีพใดเลย ระบบจะอนุญาตให้สิทธิ์แก่ทุกอาชีพเป็นค่าเริ่มต้น
-                      </p>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                        {jobClassesList.map(cls => {
-                          const isSelected = selectedWhitelistClasses.includes(cls);
-                          return (
-                            <button
-                              key={cls}
-                              type="button"
-                              onClick={() => {
-                                if (isSelected) {
-                                  setSelectedWhitelistClasses(selectedWhitelistClasses.filter(c => c !== cls));
-                                } else {
-                                  setSelectedWhitelistClasses([...selectedWhitelistClasses, cls]);
-                                }
-                              }}
-                              className={`p-2 rounded-xl border text-left font-bold transition-all flex items-center justify-between cursor-pointer ${
-                                isSelected
-                                  ? 'bg-blue-600/10 border-blue-500 text-blue-400'
-                                  : 'bg-slate-950/60 border-slate-850 text-slate-400 hover:border-slate-800'
-                              }`}
-                            >
-                              <span className="truncate">{cls}</span>
-                              <input 
-                                type="checkbox" 
-                                checked={isSelected} 
-                                readOnly 
-                                className="w-3 h-3 rounded text-blue-600 accent-blue-500" 
-                              />
-                            </button>
-                          );
-                        })}
-                      </div>
                     </div>
 
                     {/* 2. Specific Member Whitelist */}
@@ -1541,7 +1484,6 @@ export default function SpinWheel({
                               >
                                 <div className="truncate flex flex-col">
                                   <span className="font-bold text-[10.5px] text-slate-200 leading-tight">{m.name}</span>
-                                  <span className="text-[9px] text-slate-500">{m.jobClass || 'ยังไม่ได้ระบุคลาส'}</span>
                                 </div>
                                 <input 
                                   type="checkbox" 

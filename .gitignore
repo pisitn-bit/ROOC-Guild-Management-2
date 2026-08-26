@@ -7,3 +7,8 @@ coverage/
 .env*
 !.env.example
 firebase-service-account.json
+scratch/
+*.pptx
+guild_state.json
+.vercel/
+metadata.json

@@ -100,11 +100,7 @@ export default function Config({
   const [adminPinConfirm, setAdminPinConfirm] = useState('');
   const [showAdminPINSuccess, setShowAdminPINSuccess] = useState(false);
 
-  // Job Class CRUD states
-  const jobClasses = state.jobClasses && state.jobClasses.length > 0 ? state.jobClasses : DEFAULT_JOB_CLASSES;
-  const [newJobClassName, setNewJobClassName] = useState('');
-  const [editingJobIndex, setEditingJobIndex] = useState<number | null>(null);
-  const [editingJobValue, setEditingJobValue] = useState('');
+
 
   // 1. Save Guild Name
   const handleSaveGuildName = async (e: React.FormEvent) => {
@@ -135,79 +131,7 @@ export default function Config({
     }
   };
 
-  // Job Class CRUD Handlers
-  const handleAddJobClass = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isAdmin) return;
-    const trimmed = newJobClassName.trim();
-    if (!trimmed) return;
-    if (jobClasses.some(jc => jc.toLowerCase() === trimmed.toLowerCase())) {
-      triggerAlert('ผิดพลาด', 'อาชีพนี้มีอยู่ในระบบแล้ว');
-      return;
-    }
 
-    const updatedList = [...jobClasses, trimmed];
-    await onUpdateState({
-      ...state,
-      jobClasses: updatedList,
-      lastUpdated: new Date().toISOString()
-    });
-    setNewJobClassName('');
-  };
-
-  const handleUpdateJobClass = async (index: number) => {
-    if (!isAdmin) return;
-    const trimmed = editingJobValue.trim();
-    if (!trimmed) {
-      triggerAlert('ผิดพลาด', 'ชื่ออาชีพไม่สามารถเป็นค่าว่างได้');
-      return;
-    }
-    
-    const exists = jobClasses.some((jc, idx) => idx !== index && jc.toLowerCase() === trimmed.toLowerCase());
-    if (exists) {
-      triggerAlert('ผิดพลาด', 'มีอาชีพชื่อนี้อยู่ในระบบแล้ว');
-      return;
-    }
-
-    const updatedList = [...jobClasses];
-    const oldName = updatedList[index];
-    updatedList[index] = trimmed;
-
-    // Cascade rename to members who have this job class
-    const updatedMembers = state.members.map(m => {
-      if (m.jobClass === oldName) {
-        return { ...m, jobClass: trimmed };
-      }
-      return m;
-    });
-
-    await onUpdateState({
-      ...state,
-      jobClasses: updatedList,
-      members: updatedMembers,
-      lastUpdated: new Date().toISOString()
-    });
-    setEditingJobIndex(null);
-    setEditingJobValue('');
-  };
-
-  const handleDeleteJobClass = (index: number) => {
-    if (!isAdmin) return;
-    const targetJob = jobClasses[index];
-    
-    triggerConfirm(
-      'ยืนยันการลบอาชีพ',
-      `คุณแน่ใจหรือไม่ว่าต้องการลบอาชีพ "${targetJob}" ออกจากระบบ? สมาชิกที่มีอาชีพนี้อยู่แล้วจะไม่ถูกผลกระทบ แต่จะไม่สามารถเลือกอาชีพนี้ได้อีกเมื่อสร้างสมาชิกใหม่`,
-      async () => {
-        const updatedList = jobClasses.filter((_, idx) => idx !== index);
-        await onUpdateState({
-          ...state,
-          jobClasses: updatedList,
-          lastUpdated: new Date().toISOString()
-        });
-      }
-    );
-  };
 
   // 2. Add Master Item
   const handleAddMasterItem = async (e: React.FormEvent) => {
@@ -668,108 +592,7 @@ export default function Config({
             </div>
           </div>
 
-          {/* JOB CLASSES CRUD CARD */}
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-850 pb-2.5">
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-sm font-black text-slate-200">จัดการข้อมูลอาชีพ (Guild Job Classes)</h3>
-              </div>
-              <span className="text-[10px] bg-slate-950 border border-slate-800 text-slate-400 font-bold px-2 py-0.5 rounded-full font-mono">
-                {jobClasses.length} อาชีพ
-              </span>
-            </div>
 
-            {isAdmin && (
-              <form onSubmit={handleAddJobClass} className="space-y-2">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    required
-                    value={newJobClassName}
-                    onChange={e => setNewJobClassName(e.target.value)}
-                    className="flex-grow bg-slate-950 text-slate-200 px-3 py-2 rounded-xl border border-slate-800 text-xs font-bold focus:outline-none focus:border-emerald-500 placeholder:text-slate-600"
-                    placeholder="กรอกชื่ออาชีพใหม่..."
-                  />
-                  <button
-                    type="submit"
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-3 py-2 rounded-xl text-xs transition-colors shadow-md flex items-center justify-center shrink-0"
-                    title="เพิ่มอาชีพ"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </div>
-              </form>
-            )}
-
-            <div className="bg-slate-950 border border-slate-850 rounded-2xl overflow-hidden max-h-64 overflow-y-auto">
-              {jobClasses.length === 0 ? (
-                <p className="text-xs text-slate-500 py-6 text-center italic">ไม่มีข้อมูลอาชีพในระบบ</p>
-              ) : (
-                <div className="divide-y divide-slate-850 font-sans">
-                  {jobClasses.map((jc, idx) => {
-                    const isEditing = editingJobIndex === idx;
-                    return (
-                      <div key={idx} className="p-2.5 flex justify-between items-center hover:bg-slate-850/10 transition-colors text-xs gap-2">
-                        {isEditing ? (
-                          <div className="flex-grow flex gap-2">
-                            <input
-                              type="text"
-                              value={editingJobValue}
-                              onChange={e => setEditingJobValue(e.target.value)}
-                              className="flex-grow bg-slate-900 text-slate-200 px-2 py-1.5 rounded-lg border border-slate-800 text-xs font-bold focus:outline-none focus:border-blue-500"
-                            />
-                            <button
-                              onClick={() => handleUpdateJobClass(idx)}
-                              className="bg-blue-600 hover:bg-blue-500 text-white p-1.5 rounded-lg transition-colors"
-                              title="บันทึก"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingJobIndex(null);
-                                setEditingJobValue('');
-                              }}
-                              className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-1.5 rounded-lg transition-colors"
-                              title="ยกเลิก"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <>
-                            <span className="font-extrabold text-slate-300">{jc}</span>
-                            {isAdmin && (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => {
-                                    setEditingJobIndex(idx);
-                                    setEditingJobValue(jc);
-                                  }}
-                                  className="text-slate-500 hover:text-blue-400 p-1 rounded hover:bg-slate-900 transition-colors"
-                                  title="แก้ไขอาชีพ"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteJobClass(idx)}
-                                  className="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-slate-900 transition-colors"
-                                  title="ลบอาชีพ"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
 
           {/* 3. QUICK DISCORD BOT STATUS AND BULK CLEANUP */}
           {isAdmin && (

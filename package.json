@@ -14,6 +14,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "canvas-confetti": "^1.9.4",
+    "discord.js": "^14.27.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "firebase-admin": "^14.2.0",

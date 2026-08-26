@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GuildState, Member, DEFAULT_JOB_CLASSES } from '../types';
 import { 
   Users, 
@@ -31,15 +31,83 @@ interface MembersProps {
 }
 
 export default function Members({ state, currentUser, isAdmin, onUpdateState, showAlert, showConfirm }: MembersProps) {
-  const jobClasses = state.jobClasses && state.jobClasses.length > 0 ? state.jobClasses : DEFAULT_JOB_CLASSES;
   const [showAddForm, setShowAddForm] = useState(false);
   const [newMemberName, setNewMemberName] = useState('');
-  const [newMemberRole, setNewMemberRole] = useState<'admin' | 'member'>('member');
-  const [newMemberJob, setNewMemberJob] = useState(jobClasses[0] || 'Lord Knight');
   const [tempPIN, setTempPIN] = useState(state.systemPIN);
   const [tempAdminPIN, setTempAdminPIN] = useState(state.adminPIN || 'ro-admin-5678');
   const [showPINSuccess, setShowPINSuccess] = useState(false);
   const [showAdminPINSuccess, setShowAdminPINSuccess] = useState(false);
+  const [isSyncingDiscord, setIsSyncingDiscord] = useState(false);
+
+  const handleSyncDiscord = async () => {
+    if (!state.discordConfig.botToken || !state.discordConfig.guildId) {
+      triggerAlert(
+        'ไม่ได้ตั้งค่าการซิงค์', 
+        'กรุณาเข้าไปตั้งค่า Discord Bot Token และ Server ID (Guild ID) ในแท็บ "ตั้งค่า Discord บอท" ก่อนใช้งานระบบซิงค์สมาชิก'
+      );
+      return;
+    }
+
+    setIsSyncingDiscord(true);
+    try {
+      const response = await fetch("/api/discord/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await response.json();
+      if (data.success) {
+        onUpdateState({
+          ...state,
+          members: data.members,
+          discordConfig: {
+            ...state.discordConfig,
+            lastSyncTime: data.lastSyncTime
+          }
+        });
+        triggerAlert('สำเร็จ', data.message);
+      } else {
+        triggerAlert('ล้มเหลว', data.message || 'ไม่สามารถซิงค์ข้อมูลจาก Discord ได้');
+      }
+    } catch (e: any) {
+      triggerAlert('ข้อผิดพลาด', `ล้มเหลวในการเชื่อมต่อเซิร์ฟเวอร์: ${e?.message || e}`);
+    } finally {
+      setIsSyncingDiscord(false);
+    }
+  };
+
+  const handleAutoSyncDiscord = async () => {
+    try {
+      const response = await fetch("/api/discord/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await response.json();
+      if (data.success) {
+        onUpdateState({
+          ...state,
+          members: data.members,
+          discordConfig: {
+            ...state.discordConfig,
+            lastSyncTime: data.lastSyncTime
+          }
+        });
+        console.log("Auto-sync with Discord completed successfully");
+      }
+    } catch (e) {
+      console.warn("Failed auto-sync with Discord:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (isAdmin && state.discordConfig.botToken && state.discordConfig.guildId && state.discordConfig.autoSync) {
+      const lastSync = state.discordConfig.lastSyncTime;
+      const oneHour = 60 * 60 * 1000;
+      const shouldSync = !lastSync || (Date.now() - new Date(lastSync).getTime() > oneHour);
+      if (shouldSync) {
+        handleAutoSyncDiscord();
+      }
+    }
+  }, []);
 
   // Fallback safe triggers for sandboxed iframe
   const triggerAlert = (title: string, message: string) => {
@@ -63,21 +131,13 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
   // Editing state for members
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-  const [editRole, setEditRole] = useState<'admin' | 'member'>('member');
-  const [editJobClass, setEditJobClass] = useState(jobClasses[0] || 'Lord Knight');
-  const [editWarsCount, setEditWarsCount] = useState(0);
-  const [editHasReceived, setEditHasReceived] = useState(false);
-  const [editJoinedAt, setEditJoinedAt] = useState('');
+  const [editDelFlag, setEditDelFlag] = useState(true);
 
   // Helper to start editing a member
   const startEditing = (member: Member) => {
     setEditingMemberId(member.id);
     setEditName(member.name);
-    setEditRole(member.role);
-    setEditJobClass(member.jobClass || 'Lord Knight');
-    setEditWarsCount(member.participatedWarsCount);
-    setEditHasReceived(member.hasReceivedInCycle);
-    setEditJoinedAt(member.joinedAt);
+    setEditDelFlag(member.del_flag ?? true);
   };
 
   // Helper to save member edit
@@ -97,14 +157,10 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
     const updatedMembers = state.members.map(m => {
       if (m.id === id) {
         return {
-          ...m,
+          id: m.id,
           name: editName.trim(),
-          role: editRole,
-          jobClass: editJobClass,
-          participatedWarsCount: editWarsCount,
-          hasReceivedInCycle: editHasReceived,
-          joinedAt: editJoinedAt
-        };
+          del_flag: editDelFlag
+        } as Member;
       }
       return m;
     });
@@ -132,11 +188,7 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
     const createdMember: Member = {
       id: `mem-${Date.now()}`,
       name: newMemberName.trim(),
-      role: newMemberRole,
-      participatedWarsCount: 0,
-      hasReceivedInCycle: false,
-      joinedAt: new Date().toISOString().split('T')[0],
-      jobClass: newMemberJob
+      del_flag: true
     };
 
     onUpdateState({
@@ -167,22 +219,6 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
     );
   };
 
-  // 3. Toggle received item status
-  const handleToggleReceivedStatus = (memberId: string) => {
-    if (!isAdmin) return;
-    const updatedMembers = state.members.map(m => {
-      if (m.id === memberId) {
-        return { ...m, hasReceivedInCycle: !m.hasReceivedInCycle };
-      }
-      return m;
-    });
-
-    onUpdateState({
-      ...state,
-      members: updatedMembers
-    });
-  };
-
   // 4. Reset entire rotation cycle
   const handleResetCycle = () => {
     if (!isAdmin) return;
@@ -192,11 +228,43 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
       () => {
         onUpdateState({
           ...state,
-          currentCycle: (state.currentCycle || 1) + 1,
-          members: state.members.map(m => ({
-            ...m,
-            hasReceivedInCycle: false
-          }))
+          currentCycle: (state.currentCycle || 1) + 1
+        });
+      }
+    );
+  };
+
+  const handleEnableAllMembers = () => {
+    if (!isAdmin) return;
+    triggerConfirm(
+      'ยืนยันการเปิดใช้งานทั้งหมด',
+      'คุณแน่ใจหรือไม่ว่าต้องการเปิดใช้งานสมาชิกทุกคนในกิลด์?',
+      () => {
+        const updatedMembers = state.members.map(m => ({
+          ...m,
+          del_flag: true
+        }));
+        onUpdateState({
+          ...state,
+          members: updatedMembers
+        });
+      }
+    );
+  };
+
+  const handleDisableAllMembers = () => {
+    if (!isAdmin) return;
+    triggerConfirm(
+      'ยืนยันการปิดใช้งานทั้งหมด',
+      'คุณแน่ใจหรือไม่ว่าต้องการปิดใช้งานสมาชิกทุกคนในกิลด์? (สมาชิกที่ปิดใช้งานจะไม่ถูกสุ่มในวงล้อหรือรับไอเทม)',
+      () => {
+        const updatedMembers = state.members.map(m => ({
+          ...m,
+          del_flag: false
+        }));
+        onUpdateState({
+          ...state,
+          members: updatedMembers
         });
       }
     );
@@ -259,6 +327,29 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 รีเซ็ตวัฏจักรเริ่มรอบใหม่
+              </button>
+              <button
+                onClick={handleEnableAllMembers}
+                className="flex items-center gap-1.5 bg-emerald-950/45 hover:bg-emerald-900/30 text-emerald-400 border border-emerald-500/20 px-3 py-2 rounded-xl transition-all font-bold text-xs"
+                id="enable-all-members-btn"
+              >
+                🟢 เปิดใช้งานทั้งหมด
+              </button>
+              <button
+                onClick={handleDisableAllMembers}
+                className="flex items-center gap-1.5 bg-amber-950/45 hover:bg-amber-900/30 text-amber-400 border border-amber-500/20 px-3 py-2 rounded-xl transition-all font-bold text-xs"
+                id="disable-all-members-btn"
+              >
+                🔴 ปิดใช้งานทั้งหมด
+              </button>
+              <button
+                onClick={handleSyncDiscord}
+                disabled={isSyncingDiscord}
+                className="flex items-center gap-1.5 bg-indigo-950/40 hover:bg-indigo-900/30 text-indigo-400 border border-indigo-500/20 px-3 py-2 rounded-xl transition-all font-bold text-xs disabled:opacity-50"
+                id="sync-discord-members-btn"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDiscord ? 'animate-spin' : ''}`} />
+                ซิงค์จาก Discord
               </button>
               <button
                 onClick={() => setShowAddForm(!showAddForm)}
@@ -344,7 +435,7 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
       {/* Add Member Form */}
       {showAddForm && (
         <form onSubmit={handleAddMember} className="bg-slate-900 border border-blue-500/20 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-12 gap-4 animate-fade-in">
-          <div className="sm:col-span-5">
+          <div className="sm:col-span-10">
             <label className="text-xs font-bold text-slate-400 block mb-1">ชื่อตัวละครในกิลด์ (ตรงตามในเกม)</label>
             <input
               type="text"
@@ -352,36 +443,13 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
               placeholder="เช่น เทพซ่า999"
               value={newMemberName}
               onChange={e => setNewMemberName(e.target.value)}
-              className="w-full bg-slate-950 text-slate-200 px-3 py-2 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 text-xs"
+              className="w-full bg-slate-950 text-slate-200 px-3 py-2 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 text-xs font-bold"
             />
-          </div>
-          <div className="sm:col-span-3">
-            <label className="text-xs font-bold text-slate-400 block mb-1">อาชีพ (Class)</label>
-            <select
-              value={newMemberJob}
-              onChange={e => setNewMemberJob(e.target.value)}
-              className="w-full bg-slate-950 text-slate-200 px-3 py-2 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 text-xs font-semibold"
-            >
-              {jobClasses.map(jc => (
-                <option key={jc} value={jc}>{jc}</option>
-              ))}
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className="text-xs font-bold text-slate-400 block mb-1">สิทธิ์ระบบจัดการ</label>
-            <select
-              value={newMemberRole}
-              onChange={e => setNewMemberRole(e.target.value as any)}
-              className="w-full bg-slate-950 text-slate-200 px-3 py-2 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500 text-xs"
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
           </div>
           <div className="sm:col-span-2 flex items-end">
             <button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2 rounded-xl text-xs transition-colors"
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2 rounded-xl text-xs transition-colors animate-pulse"
             >
               ยืนยันการเพิ่ม
             </button>
@@ -396,11 +464,7 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
             <thead>
               <tr className="bg-slate-950 text-slate-400 text-xs font-bold border-b border-slate-850">
                 <th className="p-4">ชื่อตัวละครในกิลด์</th>
-                <th className="p-4">อาชีพ (Class)</th>
-                <th className="p-4">ตำแหน่ง / สิทธิ์จัดการ</th>
-                <th className="p-4">จำนวนครั้งที่เข้าวอร์</th>
-                <th className="p-4">สถานะสิทธิ์การประมูลรอบนี้</th>
-                <th className="p-4">วันที่เข้าร่วมกิลด์</th>
+                <th className="p-4">สถานะการใช้งาน</th>
                 {isAdmin && <th className="p-4 text-center">การจัดการ</th>}
               </tr>
             </thead>
@@ -409,7 +473,7 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
                 const isEditing = editingMemberId === member.id;
 
                 return (
-                  <tr key={member.id} className="hover:bg-slate-850/20 transition-colors">
+                  <tr key={member.id} className={`hover:bg-slate-850/20 transition-colors ${(member.del_flag ?? true) ? '' : 'opacity-50'}`}>
                     {/* Character Name */}
                     <td className="p-4">
                       {isEditing ? (
@@ -421,7 +485,7 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
                         />
                       ) : (
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-bold text-blue-400">
+                          <div className="w-8 h-8 rounded-full bg-slate-850 text-slate-400 flex items-center justify-center font-bold">
                             {member.name.charAt(0)}
                           </div>
                           <div>
@@ -436,115 +500,26 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
                       )}
                     </td>
 
-                    {/* Job Class */}
-                    <td className="p-4 font-semibold text-slate-300">
-                      {isEditing ? (
-                        <select
-                          value={editJobClass}
-                          onChange={e => setEditJobClass(e.target.value)}
-                          className="bg-slate-950 text-slate-200 px-2 py-1.5 rounded border border-slate-800 text-xs font-bold focus:outline-none focus:border-blue-500"
-                        >
-                          {jobClasses.map(jc => (
-                            <option key={jc} value={jc}>{jc}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        member.jobClass || 'Lord Knight'
-                      )}
-                    </td>
-
-                    {/* Role */}
+                    {/* Status (del_flag) */}
                     <td className="p-4">
                       {isEditing ? (
                         <select
-                          value={editRole}
-                          onChange={e => setEditRole(e.target.value as any)}
+                          value={editDelFlag ? 'true' : 'false'}
+                          onChange={e => setEditDelFlag(e.target.value === 'true')}
                           className="bg-slate-950 text-slate-200 px-2 py-1.5 rounded border border-slate-800 text-xs font-bold focus:outline-none focus:border-blue-500"
                         >
-                          <option value="member">Member</option>
-                          <option value="admin">Admin</option>
+                          <option value="true">🟢 ใช้งานปกติ (Active)</option>
+                          <option value="false">🔴 ปิดการใช้งาน (Inactive)</option>
                         </select>
                       ) : (
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 ${
-                          member.role === 'admin' ? 'bg-blue-950 text-blue-400 border border-blue-500/20' : 'bg-slate-950 text-slate-400 border border-slate-800'
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ${
+                          (member.del_flag ?? true)
+                            ? 'bg-emerald-950/20 text-emerald-400 border border-emerald-900/20'
+                            : 'bg-red-950/20 text-red-400 border border-red-900/20'
                         }`}>
-                          {member.role === 'admin' ? (
-                            <>
-                              <ShieldCheck className="w-3 h-3 text-blue-400" />
-                              <span>Admin</span>
-                            </>
-                          ) : (
-                            <span>Member</span>
-                          )}
+                          <span className={`w-1.5 h-1.5 rounded-full ${(member.del_flag ?? true) ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                          <span>{(member.del_flag ?? true) ? 'ใช้งานปกติ' : 'ปิดการใช้งาน'}</span>
                         </span>
-                      )}
-                    </td>
-
-                    {/* Wars Count */}
-                    <td className="p-4 font-mono font-bold text-slate-300">
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          min="0"
-                          value={editWarsCount}
-                          onChange={e => setEditWarsCount(parseInt(e.target.value) || 0)}
-                          className="bg-slate-950 text-slate-200 px-2 py-1 rounded border border-slate-800 text-xs font-bold w-16 text-center focus:outline-none focus:border-blue-500 font-mono"
-                        />
-                      ) : (
-                        `${member.participatedWarsCount} ครั้ง`
-                      )}
-                    </td>
-
-                    {/* Received item status */}
-                    <td className="p-4">
-                      {isEditing ? (
-                        <select
-                          value={editHasReceived ? 'true' : 'false'}
-                          onChange={e => setEditHasReceived(e.target.value === 'true')}
-                          className="bg-slate-950 text-slate-200 px-2 py-1.5 rounded border border-slate-800 text-xs font-bold focus:outline-none focus:border-blue-500"
-                        >
-                          <option value="false">🟢 ยังมีสิทธิ์ประมูล</option>
-                          <option value="true">🔴 ได้รับไอเทมแล้ว</option>
-                        </select>
-                      ) : isAdmin ? (
-                        <button
-                          onClick={() => handleToggleReceivedStatus(member.id)}
-                          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border font-bold text-xs transition-all ${
-                            member.hasReceivedInCycle 
-                              ? 'bg-red-950/40 text-red-400 border-red-500/20 hover:bg-red-900/10'
-                              : 'bg-emerald-950/40 text-emerald-400 border-emerald-500/20 hover:bg-emerald-900/10'
-                          }`}
-                          title="คลิกเพื่อสลับสิทธิ์การรับไอเทมด้วยตนเอง"
-                        >
-                          <span className={`w-2 h-2 rounded-full ${member.hasReceivedInCycle ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-                          <span>{member.hasReceivedInCycle ? '🔴 ได้รับไอเทมแล้ว' : '🟢 ยังมีสิทธิ์ประมูล'}</span>
-                        </button>
-                      ) : (
-                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ${
-                          member.hasReceivedInCycle 
-                            ? 'bg-red-950/20 text-red-400 border border-red-900/20' 
-                            : 'bg-emerald-950/20 text-emerald-400 border border-emerald-900/20'
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${member.hasReceivedInCycle ? 'bg-red-500' : 'bg-emerald-500'}`}></span>
-                          <span>{member.hasReceivedInCycle ? 'ได้รับไอเทมแล้ว' : 'ยังมีสิทธิ์ประมูล'}</span>
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Joined date */}
-                    <td className="p-4 text-slate-400 text-xs">
-                      {isEditing ? (
-                        <input
-                          type="date"
-                          value={editJoinedAt}
-                          onChange={e => setEditJoinedAt(e.target.value)}
-                          className="bg-slate-950 text-slate-200 px-2 py-1 rounded border border-slate-800 text-xs font-bold focus:outline-none focus:border-blue-500 font-mono text-center"
-                        />
-                      ) : (
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                          <span>{member.joinedAt}</span>
-                        </div>
                       )}
                     </td>
 
@@ -564,7 +539,7 @@ export default function Members({ state, currentUser, isAdmin, onUpdateState, sh
                             <button
                               type="button"
                               onClick={() => setEditingMemberId(null)}
-                              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors"
+                              className="p-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-lg transition-colors"
                               title="ยกเลิก"
                             >
                               <X className="w-3.5 h-3.5" />
